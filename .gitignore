@@ -1,0 +1,62 @@
+# Build artifacts
+build/
+*.so
+*.pyd
+*.o
+*.d
+CMakeCache.txt
+cmake_install.cmake
+CMakeFiles/
+Makefile
+*.cmake
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+*.egg
+dist/
+*.whl
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+*.tmp
+
+# Generated files
+*.wdr
+reconstructed.png
+recon_output.png
+lenna.wdr
+
+# Compiled modules
+wdr_coder.cpython-*.so
+wdr_coder*.so
+
+# Test artifacts (keep test images, exclude generated outputs)
+tests_data/recon_output.png
+
+# Debug files
+*.dSYM/
+*.gdb_history
+
+# Coverage reports
+.coverage
+htmlcov/
+*.cover
+
+# Virtual environments
+venv/
+env/
+ENV/
+
