@@ -87,21 +87,18 @@ void ArithmeticCoder::start_decoding(BitInputStream& stream, AdaptiveModel& mode
     decoding_ = true;
     encoding_ = false;
     
-    // Read the first CODE_VALUE_BITS bits to fill the value buffer
-    // For arithmetic coding, we need at least 16 bits to start decoding
-    // This is a fundamental requirement of the Witten-Neal-Cleary algorithm
+    // Read up to CODE_VALUE_BITS bits (pad with zeros if stream is shorter)
     value_ = 0;
     for (int i = 0; i < CODE_VALUE_BITS; i++) {
+        bool bit = false;
         try {
-            value_ = 2 * value_ + (stream.read_bit() ? 1 : 0);
-        } catch (const std::runtime_error& e) {
-            // Stream ended early - this is an error for arithmetic coding
-            // Arithmetic coding requires sufficient bits to decode correctly
-            // This can happen with very short encoded sequences (edge cases)
-            throw std::runtime_error("ArithmeticCoder: insufficient bits for decoding (need at least 16 bits). "
-                                   "This can occur with very short sequences. "
-                                   "Ensure sufficient data or use more compression passes.");
+            bit = stream.read_bit();
+        } catch (const std::runtime_error&) {
+            // End of stream: pad remaining bits with zeros
+            // to keep encoder/decoder intervals aligned
+            bit = false;
         }
+        value_ = 2 * value_ + (bit ? 1 : 0);
     }
     
     low_ = 0;

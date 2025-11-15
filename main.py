@@ -30,9 +30,10 @@ Note: Using scales=6+ introduces boundary artifacts as warned by PyWavelets,
 import argparse
 import sys
 import os
+from pathlib import Path
 import numpy as np
-import wdr_coder
-import wdr_helpers as hlp
+from wdr import coder as wdr_coder
+from wdr.utils import helpers as hlp
 
 
 def calculate_psnr(original: np.ndarray, compressed: np.ndarray) -> float:
@@ -68,6 +69,21 @@ def calculate_psnr(original: np.ndarray, compressed: np.ndarray) -> float:
     psnr = 20 * np.log10(max_pixel / np.sqrt(mse))
     
     return psnr
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "compressed"
+
+
+def _resolve_output_path(path_arg: str, default_dir: Path) -> Path:
+    """
+    Resolve an output path, defaulting to ``default_dir`` when only a filename is provided.
+    """
+    target = Path(path_arg)
+    if target.parent == Path('.'):
+        target = default_dir / target.name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return target.resolve()
 
 
 def main():
@@ -141,6 +157,15 @@ Note: Default scales is 2 (recommended: 2-3). Using scales=6+ introduces
     )
     
     args = parser.parse_args()
+
+    # Normalize output destinations
+    DEFAULT_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = _resolve_output_path(args.output_wdr, DEFAULT_OUTPUT_DIR)
+    args.output_wdr = str(output_path)
+
+    if args.reconstructed:
+        recon_path = _resolve_output_path(args.reconstructed, DEFAULT_OUTPUT_DIR)
+        args.reconstructed = str(recon_path)
     
     # --- 1. COMPRESSION ---
     print("=" * 60)

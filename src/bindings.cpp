@@ -103,13 +103,13 @@ py::array_t<double> decompress(const std::string& input_filepath) {
  * This function initializes the Python module and exposes the compression
  * and decompression functions to Python.
  * 
- * Module name: wdr_coder
+ * Module name: wdr.coder
  * 
  * Exposed functions:
  * - compress(coeffs, output_filepath, num_passes=26): Compress coefficients to a .wdr file
  * - decompress(input_filepath): Decompress coefficients from a .wdr file
  */
-PYBIND11_MODULE(wdr_coder, m) {
+PYBIND11_MODULE(coder, m) {
     m.doc() = "WDR Image Compression Coder - Python bindings for WDR compression algorithm";
     
     m.def("compress", &compress, 

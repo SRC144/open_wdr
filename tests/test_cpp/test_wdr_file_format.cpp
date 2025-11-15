@@ -82,7 +82,8 @@ TEST(WDRFileFormatTest, ReadHeader_InvalidVersion) {
 
 // Test: WriteReadHeader_RoundTrip
 TEST(WDRFileFormatTest, WriteReadHeader_RoundTrip) {
-    WDRCompressor comp(16);
+    // Use 26 passes to ensure T_final < 1e-6 even for coefficients up to 100
+    WDRCompressor comp(26);
     std::vector<double> coeffs = {100.0, 50.0, 25.0, 12.5, 6.25};
     
     std::string test_file = "/tmp/test_header_roundtrip.wdr";

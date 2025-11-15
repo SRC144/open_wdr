@@ -2,7 +2,7 @@ import os
 import sys
 import subprocess
 from pathlib import Path
-from setuptools import setup, Extension
+from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext
 import pybind11
 
@@ -30,9 +30,11 @@ class CMakeBuild(build_ext):
         cmake_args = [
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir,
             "-DPYTHON_EXECUTABLE=" + sys.executable,
+            "-Dpybind11_DIR=" + pybind11.get_cmake_dir(),
+            "-DWDR_BUILD_TESTING=OFF",
         ]
 
-        cfg = "Debug" if self.debug else "Release"
+        cfg = "Release"
         build_args = ["--config", cfg]
 
         cmake_args += ["-DCMAKE_BUILD_TYPE=" + cfg]
@@ -58,7 +60,8 @@ setup(
     author="WDR Compression Pipeline",
     description="Hybrid Python/C++ WDR Image Compression Pipeline",
     long_description="",
-    ext_modules=[CMakeExtension("wdr_coder")],
+    packages=find_packages(),
+    ext_modules=[CMakeExtension("wdr.coder")],
     cmdclass=dict(build_ext=CMakeBuild),
     zip_safe=False,
     python_requires=">=3.8",

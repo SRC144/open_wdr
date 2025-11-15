@@ -39,12 +39,16 @@ reconstructed.png
 recon_output.png
 lenna.wdr
 
-# Compiled modules
-wdr_coder.cpython-*.so
-wdr_coder*.so
+# Output artifacts (keep directory structure only)
+compressed/*
+!compressed/.gitkeep
+!compressed/tests/
+compressed/tests/*
+!compressed/tests/.gitkeep
 
-# Test artifacts (keep test images, exclude generated outputs)
-tests_data/recon_output.png
+# Compiled modules
+wdr/coder.cpython-*.so
+wdr/coder*.so
 
 # Debug files
 *.dSYM/
@@ -56,7 +60,11 @@ htmlcov/
 *.cover
 
 # Virtual environments
+.venv/
 venv/
 env/
+.env/
 ENV/
 
+#context files
+context/

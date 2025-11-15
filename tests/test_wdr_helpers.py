@@ -1,5 +1,5 @@
 """
-Unit tests for wdr_helpers.py
+Unit tests for wdr.utils.helpers
 """
 
 import numpy as np
@@ -7,7 +7,11 @@ import pytest
 import tempfile
 import os
 from pathlib import Path
-import wdr_helpers as hlp
+from wdr.utils import helpers as hlp
+
+pytestmark = [
+    pytest.mark.filterwarnings("ignore:Level value of .*boundary effects.:UserWarning"),
+]
 
 
 def test_load_image():

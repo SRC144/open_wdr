@@ -6,15 +6,26 @@ import numpy as np
 import pytest
 import tempfile
 import os
-import wdr_helpers as hlp
+from pathlib import Path
+from wdr.utils import helpers as hlp
 
-# Try to import wdr_coder - skip tests if not available
+pytestmark = [
+    pytest.mark.filterwarnings("ignore:Level value of .*boundary effects.:UserWarning"),
+]
+
+# Try to import the compiled coder - skip tests if not available
 try:
-    import wdr_coder
+    from wdr import coder as wdr_coder
     WDR_CODER_AVAILABLE = True
 except ImportError:
     WDR_CODER_AVAILABLE = False
-    pytestmark = pytest.mark.skip("wdr_coder module not available")
+    pytestmark.append(pytest.mark.skip("wdr_coder module not available"))
+
+TESTS_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = TESTS_DIR.parent
+ASSETS_DIR = PROJECT_ROOT / "assets"
+TEST_OUTPUT_DIR = PROJECT_ROOT / "compressed" / "tests"
+TEST_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @pytest.mark.skipif(not WDR_CODER_AVAILABLE, reason="wdr_coder module not available")
@@ -213,13 +224,10 @@ def test_test_pattern():
     # Flatten coefficients
     flat_coeffs, shape_metadata = hlp.flatten_coeffs(coeffs)
     
-    # Create test data directory if it doesn't exist
-    test_data_dir = os.path.join(os.path.dirname(__file__), '..', 'tests_data')
-    os.makedirs(test_data_dir, exist_ok=True)
-    test_pattern_path = os.path.join(test_data_dir, 'test_pattern.png')
+    test_pattern_path = TEST_OUTPUT_DIR / 'pattern.png'
     
-    # Save test pattern
-    hlp.save_image(test_pattern_path, test_pattern)
+    # Save test pattern for manual inspection if needed
+    hlp.save_image(str(test_pattern_path), test_pattern)
     
     # Compress and decompress
     with tempfile.NamedTemporaryFile(suffix='.wdr', delete=False) as f:
@@ -243,17 +251,15 @@ def test_test_pattern():
 
 @pytest.mark.skipif(not WDR_CODER_AVAILABLE, reason="wdr_coder module not available")
 def test_golden_file():
-    """Test golden file comparison for deterministic behavior."""
-    # Use lenna_small.png if it exists, otherwise skip
-    test_data_dir = os.path.join(os.path.dirname(__file__), '..', 'tests_data')
-    lenna_path = os.path.join(test_data_dir, 'lenna_small.png')
-    golden_path = os.path.join(test_data_dir, 'golden_recon.png')
+    """Test deterministic reconstruction against the source image."""
+    # Use assets/lenna.png if it exists, otherwise skip
+    lenna_path = ASSETS_DIR / 'lenna.png'
     
-    if not os.path.exists(lenna_path):
+    if not lenna_path.exists():
         pytest.skip("Test image not found")
     
     # Load original image
-    original_img = hlp.load_image(lenna_path)
+    original_img = hlp.load_image(str(lenna_path))
     
     # Perform DWT
     coeffs = hlp.do_dwt(original_img, scales=2, wavelet='bior4.4')
@@ -275,18 +281,14 @@ def test_golden_file():
         decompressed_coeffs = hlp.unflatten_coeffs(decompressed_flat_coeffs, shape_metadata)
         reconstructed_img = hlp.do_idwt(decompressed_coeffs, wavelet='bior4.4')
         
-        # Save reconstructed image
-        recon_output_path = os.path.join(test_data_dir, 'recon_output.png')
-        hlp.save_image(recon_output_path, reconstructed_img)
+        # Save reconstructed image (quantized to uint8) for inspection
+        recon_output_path = TEST_OUTPUT_DIR / 'recon_output.png'
+        hlp.save_image(str(recon_output_path), reconstructed_img)
         
-        # If golden file exists, compare
-        if os.path.exists(golden_path):
-            golden_img = hlp.load_image(golden_path)
-            np.testing.assert_array_equal(reconstructed_img, golden_img)
-        else:
-            # First run - golden file doesn't exist yet
-            # User should manually verify and rename recon_output.png to golden_recon.png
-            pytest.skip("Golden file not found - this is the first run. Please verify recon_output.png and rename to golden_recon.png")
+        # Compare quantized reconstruction to original source image
+        quantized = np.clip(np.rint(reconstructed_img), 0, 255).astype(np.uint8)
+        source_uint8 = np.clip(np.rint(original_img), 0, 255).astype(np.uint8)
+        np.testing.assert_array_equal(quantized, source_uint8)
     finally:
         if os.path.exists(temp_path):
             os.unlink(temp_path)
@@ -294,14 +296,13 @@ def test_golden_file():
 @pytest.mark.skipif(not WDR_CODER_AVAILABLE, reason="wdr_coder module not available")
 def test_real_image_round_trip():
     """Test full round-trip with real image."""
-    test_data_dir = os.path.join(os.path.dirname(__file__), '..', 'tests_data')
-    lenna_path = os.path.join(test_data_dir, 'lenna_small.png')
+    lenna_path = ASSETS_DIR / 'lenna.png'
     
-    if not os.path.exists(lenna_path):
+    if not lenna_path.exists():
         pytest.skip("Test image not found")
     
     # Load original image
-    original_img = hlp.load_image(lenna_path)
+    original_img = hlp.load_image(str(lenna_path))
     
     # Perform DWT
     coeffs = hlp.do_dwt(original_img, scales=2, wavelet='bior4.4')

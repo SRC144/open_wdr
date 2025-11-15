@@ -97,7 +97,9 @@ def save_image(filepath: str, img_array: np.ndarray) -> None:
     Path(filepath).parent.mkdir(parents=True, exist_ok=True)
     
     # Create PIL Image and save
-    img = Image.fromarray(img_array, mode='L')
+    img = Image.fromarray(img_array)
+    if img.mode != 'L':
+        img = img.convert('L')
     img.save(filepath)
 
 
@@ -139,7 +141,7 @@ def do_dwt(img_array: np.ndarray, scales: int = 2, wavelet: str = 'bior4.4') -> 
         raise ValueError(f"scales must be > 0, got {scales}")
     
     # Perform 2D DWT
-    coeffs = pywt.wavedec2(img_array, wavelet, mode='sym', level=scales)
+    coeffs = pywt.wavedec2(img_array, wavelet, mode='symmetric', level=scales)
     
     return coeffs
 
@@ -172,7 +174,7 @@ def do_idwt(coeffs: Tuple, wavelet: str = 'bior4.4') -> np.ndarray:
         (256, 256)
     """
     # Perform 2D IDWT
-    img_array = pywt.waverec2(coeffs, wavelet, mode='sym')
+    img_array = pywt.waverec2(coeffs, wavelet, mode='symmetric')
     
     return img_array
 

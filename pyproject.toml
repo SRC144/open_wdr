@@ -21,8 +21,8 @@ dev = [
 ]
 
 [tool.setuptools]
-py-modules = ["wdr_helpers"]
+package-dir = {"" = "."}
 
-[tool.setuptools.package-data]
-"*" = ["*.py", "*.pyi"]
+[tool.setuptools.packages.find]
+include = ["wdr*"]
 

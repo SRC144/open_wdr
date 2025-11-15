@@ -28,7 +28,6 @@
 #include "adaptive_model.hpp"
 #include "bit_stream.hpp"
 #include "wdr_file_format.hpp"
-#include "wdr_debug.hpp"
 #include <fstream>
 #include <cmath>
 

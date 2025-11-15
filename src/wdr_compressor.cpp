@@ -57,11 +57,6 @@ void WDRCompressor::compress(const std::vector<double>& coeffs, const std::strin
     // Calculate initial threshold
     initial_T_ = calculate_initial_T(coeffs);
     
-    // Debug: Log compression start
-    WDR_DEBUG_LOG("ENCODER: Starting compression: num_coeffs=" << coeffs.size() 
-        << " initial_T=" << std::fixed << std::setprecision(6) << initial_T_ 
-        << " num_passes=" << num_passes_);
-    
     // Initialize coefficient sets
     ICS_.clear();
     SCS_.clear();
@@ -99,8 +94,6 @@ void WDRCompressor::compress(const std::vector<double>& coeffs, const std::strin
     // Main compression loop
     double T = initial_T_;
     for (int pass = 0; pass < num_passes_; pass++) {
-        WDR_DEBUG_LOG("=== ENCODER PASS " << pass << " ===");
-        
         // Sorting pass (uses index_model and sign_model)
         sorting_pass_encode(T, coder, index_model, sign_model);
         
@@ -113,9 +106,6 @@ void WDRCompressor::compress(const std::vector<double>& coeffs, const std::strin
             double center = T + T / 2.0;  // 1.5*T
             SCS_.push_back(std::make_pair(val, center));
         }
-        
-        // Debug: Log SCS state after adding new coefficients
-        WDR_DEBUG_LOG("ENCODER: After pass " << pass << ": SCS_size=" << SCS_.size());
         
         TPS_.clear();
         
@@ -192,14 +182,7 @@ std::vector<double> WDRCompressor::decompress(const std::string& input_file) {
     // Main decompression loop
     double T = initial_T_;
     
-    // Debug: Log initial state
-    WDR_DEBUG_LOG("DECODER: Starting decompression: num_coeffs=" << num_coeffs 
-        << " initial_T=" << std::fixed << std::setprecision(6) << initial_T_ 
-        << " num_passes=" << num_passes_);
-    
     for (int pass = 0; pass < num_passes_; pass++) {
-        WDR_DEBUG_LOG("=== DECODER PASS " << pass << " ===");
-        
         // Sorting pass (decode positions and signs for NEW significant coefficients)
         // This must match the encoder's order: sorting pass comes first in the bitstream
         std::vector<size_t> pass_decoded_positions;
@@ -217,26 +200,12 @@ std::vector<double> WDRCompressor::decompress(const std::string& input_file) {
             size_t array_pos = pass_decoded_positions[i];
             int sign = pass_decoded_signs[i];
             double center = TPS_[i];  // Center from sorting_pass_decode (unsigned, 1.5*T)
+            double signed_value = (sign == 1) ? center : -center;
             
-            // Store in SCS: use center as both value and center (value will be updated during refinement)
-            // The actual reconstructed value will be sign * center when we update the array
-            SCS_.push_back(std::make_pair(center, center));  // Both are unsigned centers representing |val|
+            // Store in SCS with signed value for reconstruction and unsigned center for refinement
+            SCS_.push_back(std::make_pair(signed_value, center));
             scs_to_array_pos_.push_back(array_pos);
             scs_signs_.push_back(sign);
-        }
-        
-        // Debug: Log SCS state after adding new coefficients
-        if (SCS_.size() <= 10) {
-            std::ostringstream oss_scs;
-            oss_scs << "DECODER: After adding new coeffs: SCS_size=" << SCS_.size() << " scs_to_array_pos=[";
-            for (size_t i = 0; i < scs_to_array_pos_.size(); i++) {
-                if (i > 0) oss_scs << ", ";
-                oss_scs << scs_to_array_pos_[i];
-            }
-            oss_scs << "]";
-            WDR_DEBUG_LOG(oss_scs.str());
-        } else {
-            WDR_DEBUG_LOG("DECODER: After adding new coeffs: SCS_size=" << SCS_.size());
         }
         
         TPS_.clear();
@@ -246,31 +215,11 @@ std::vector<double> WDRCompressor::decompress(const std::string& input_file) {
         // Update reconstructed array from all coefficients in SCS (including newly added and refined ones)
         // Apply the sign to the center to get the final reconstructed value
         for (size_t i = 0; i < SCS_.size(); i++) {
-            if (i < scs_to_array_pos_.size() && i < scs_signs_.size()) {
+            if (i < scs_to_array_pos_.size()) {
                 size_t array_pos = scs_to_array_pos_[i];
-                int sign = scs_signs_[i];
-                double center = SCS_[i].second;  // Current center (unsigned, representing |val|)
-                
-                // Apply sign to get the final reconstructed value
-                double reconstructed_value = (sign == 1) ? center : -center;
+                double reconstructed_value = SCS_[i].first;
                 reconstructed_array_[array_pos] = reconstructed_value;
             }
-        }
-        
-        // Debug: Log reconstructed array state
-        {
-            std::ostringstream oss_arr;
-            oss_arr << "DECODER: After pass " << pass << ": reconstructed_array=[";
-            size_t print_count = std::min(reconstructed_array_.size(), size_t(10));
-            for (size_t i = 0; i < print_count; i++) {
-                if (i > 0) oss_arr << ", ";
-                oss_arr << std::fixed << std::setprecision(6) << reconstructed_array_[i];
-            }
-            if (reconstructed_array_.size() > print_count) {
-                oss_arr << ", ... (total " << reconstructed_array_.size() << ")";
-            }
-            oss_arr << "]";
-            WDR_DEBUG_LOG(oss_arr.str());
         }
         
         // Update threshold for next pass
@@ -278,53 +227,10 @@ std::vector<double> WDRCompressor::decompress(const std::string& input_file) {
     }
     
     file.close();
-    
-    // Debug: Log final reconstructed array before returning
-    {
-        std::ostringstream oss_final;
-        oss_final << "DECODER: Final reconstructed_array=[";
-        size_t print_count_final = std::min(reconstructed_array_.size(), size_t(10));
-        for (size_t i = 0; i < print_count_final; i++) {
-            if (i > 0) oss_final << ", ";
-            oss_final << std::fixed << std::setprecision(6) << reconstructed_array_[i];
-        }
-        if (reconstructed_array_.size() > print_count_final) {
-            oss_final << ", ... (total " << reconstructed_array_.size() << ")";
-        }
-        oss_final << "]";
-        WDR_DEBUG_LOG(oss_final.str());
-    }
-    
-    // Debug: Log array size
-    WDR_DEBUG_LOG("DECODER: Returning array of size " << reconstructed_array_.size());
-    
     return reconstructed_array_;
 }
 
 void WDRCompressor::sorting_pass_encode(double T, ArithmeticCoder& coder, AdaptiveModel& index_model, AdaptiveModel& sign_model) {
-    // Debug: Log ICS state before sorting pass
-    {
-        std::ostringstream oss;
-        oss << "ENCODER: T=" << std::fixed << std::setprecision(6) << T 
-            << " ICS_size=" << ICS_.size();
-        if (ICS_.size() <= 10) {
-            oss << " ICS=[";
-            for (size_t i = 0; i < ICS_.size(); i++) {
-                if (i > 0) oss << ", ";
-                oss << ICS_[i];
-            }
-            oss << "]";
-        } else {
-            oss << " ICS=[";
-            for (size_t i = 0; i < 5; i++) {
-                if (i > 0) oss << ", ";
-                oss << ICS_[i];
-            }
-            oss << ", ... (total " << ICS_.size() << ")]";
-        }
-        WDR_DEBUG_LOG(oss.str());
-    }
-    
     std::vector<int> indices;
     std::vector<int> signs;
     
@@ -336,32 +242,7 @@ void WDRCompressor::sorting_pass_encode(double T, ArithmeticCoder& coder, Adapti
             TPS_.push_back(ICS_[i]);
         }
     }
-    
-    // Debug: Log found significant coefficients
-    {
-        std::ostringstream oss;
-        oss << "ENCODER: Found " << indices.size() << " significant coefficients";
-        if (!indices.empty()) {
-            oss << " indices=[";
-            for (size_t i = 0; i < indices.size(); i++) {
-                if (i > 0) oss << ", ";
-                oss << indices[i];
-            }
-            oss << "] values=[";
-            for (size_t i = 0; i < indices.size(); i++) {
-                if (i > 0) oss << ", ";
-                oss << ICS_[indices[i]];
-            }
-            oss << "] signs=[";
-            for (size_t i = 0; i < signs.size(); i++) {
-                if (i > 0) oss << ", ";
-                oss << signs[i];
-            }
-            oss << "]";
-        }
-        WDR_DEBUG_LOG(oss.str());
-    }
-    
+
     // Encode the count of significant coefficients first
     // This allows the decoder to know how many coefficients to expect
     // We ALWAYS encode the count, even if it's 0, so the decoder knows what to expect
@@ -395,18 +276,6 @@ void WDRCompressor::sorting_pass_encode(double T, ArithmeticCoder& coder, Adapti
     
     // Apply differential coding
     std::vector<int> diff_indices = differential_encode(indices);
-    
-    // Debug: Log differential encoding result
-    {
-        std::ostringstream oss;
-        oss << "ENCODER: diff_indices=[";
-        for (size_t i = 0; i < diff_indices.size(); i++) {
-            if (i > 0) oss << ", ";
-            oss << diff_indices[i];
-        }
-        oss << "]";
-        WDR_DEBUG_LOG(oss.str());
-    }
     
     // Calculate maximum number of bits needed for reduced indices
     int reduced_bits_needed = 0;
@@ -470,23 +339,7 @@ void WDRCompressor::sorting_pass_encode(double T, ArithmeticCoder& coder, Adapti
             new_ICS.push_back(ICS_[i]);
         }
     }
-    
-    // Debug: Log ICS state after removal
-    {
-        std::ostringstream oss;
-        oss << "ENCODER: After removal: ICS_size=" << new_ICS.size() 
-            << " (removed " << (ICS_.size() - new_ICS.size()) << " coefficients)";
-        if (new_ICS.size() <= 10) {
-            oss << " ICS=[";
-            for (size_t i = 0; i < new_ICS.size(); i++) {
-                if (i > 0) oss << ", ";
-                oss << new_ICS[i];
-            }
-            oss << "]";
-        }
-        WDR_DEBUG_LOG(oss.str());
-    }
-    
+
     ICS_ = new_ICS;
 }
 
@@ -525,29 +378,6 @@ void WDRCompressor::sorting_pass_decode(double T, ArithmeticCoder& coder, Adapti
     decoded_positions.clear();
     decoded_signs.clear();
     
-    // Debug: Log ICS map state before decoding
-    {
-        std::ostringstream oss;
-        oss << "DECODER: T=" << std::fixed << std::setprecision(6) << T 
-            << " ICS_map_size=" << ics_to_array_map.size();
-        if (ics_to_array_map.size() <= 10) {
-            oss << " ICS_map=[";
-            for (size_t i = 0; i < ics_to_array_map.size(); i++) {
-                if (i > 0) oss << ", ";
-                oss << ics_to_array_map[i];
-            }
-            oss << "]";
-        } else {
-            oss << " ICS_map=[";
-            for (size_t i = 0; i < 5; i++) {
-                if (i > 0) oss << ", ";
-                oss << ics_to_array_map[i];
-            }
-            oss << ", ... (total " << ics_to_array_map.size() << ")]";
-        }
-        WDR_DEBUG_LOG(oss.str());
-    }
-    
     // Step 1: Decode the count of significant coefficients
     int max_count = static_cast<int>(ics_to_array_map.size());
     
@@ -565,16 +395,12 @@ void WDRCompressor::sorting_pass_decode(double T, ArithmeticCoder& coder, Adapti
         count = (count << 1) | bit;
     }
     
-    // Debug: Log decoded count
-    WDR_DEBUG_LOG("DECODER: Decoded count=" << count << " (max_count=" << max_count << ")");
-    
     // Validate count
     if (count < 0 || count > max_count) {
         throw std::runtime_error("Invalid count decoded: " + std::to_string(count));
     }
     
     if (count == 0) {
-        WDR_DEBUG_LOG("DECODER: No coefficients to decode in this pass");
         return;  // No coefficients to decode in this pass
     }
     
@@ -629,37 +455,8 @@ void WDRCompressor::sorting_pass_decode(double T, ArithmeticCoder& coder, Adapti
         signs.push_back(sign);
     }
     
-    // Debug: Log decoded differential indices
-    {
-        std::ostringstream oss;
-        oss << "DECODER: diff_indices=[";
-        for (size_t i = 0; i < diff_indices.size(); i++) {
-            if (i > 0) oss << ", ";
-            oss << diff_indices[i];
-        }
-        oss << "] signs=[";
-        for (size_t i = 0; i < signs.size(); i++) {
-            if (i > 0) oss << ", ";
-            oss << signs[i];
-        }
-        oss << "]";
-        WDR_DEBUG_LOG(oss.str());
-    }
-    
     // Step 4: Invert differential coding to get original ICS indices
     std::vector<int> ics_indices = differential_decode(diff_indices);
-    
-    // Debug: Log decoded ICS indices
-    {
-        std::ostringstream oss;
-        oss << "DECODER: ics_indices=[";
-        for (size_t i = 0; i < ics_indices.size(); i++) {
-            if (i > 0) oss << ", ";
-            oss << ics_indices[i];
-        }
-        oss << "]";
-        WDR_DEBUG_LOG(oss.str());
-    }
     
     // Step 5: Map ICS indices to actual array positions and reconstruct coefficients
     TPS_.clear();
@@ -683,28 +480,7 @@ void WDRCompressor::sorting_pass_decode(double T, ArithmeticCoder& coder, Adapti
             
             // Store center in TPS (unsigned, representing |val|)
             TPS_.push_back(center);
-            
-            // Debug: Log per-coefficient mapping
-            WDR_DEBUG_LOG("DECODER: coeff[" << i << "] ics_index=" << ics_index 
-                << " -> array_pos=" << array_pos << " sign=" << sign 
-                << " center=" << std::fixed << std::setprecision(6) << center);
-        } else {
-            // Debug: Log invalid ICS index
-            WDR_DEBUG_LOG("DECODER: ERROR: Invalid ics_index=" << ics_index 
-                << " (ics_to_array_map.size()=" << ics_to_array_map.size() << ")");
         }
-    }
-    
-    // Debug: Log decoded array positions
-    {
-        std::ostringstream oss;
-        oss << "DECODER: decoded_positions=[";
-        for (size_t i = 0; i < decoded_positions.size(); i++) {
-            if (i > 0) oss << ", ";
-            oss << decoded_positions[i];
-        }
-        oss << "]";
-        WDR_DEBUG_LOG(oss.str());
     }
     
     // Step 6: Remove decoded ICS indices from the map (by creating a new map without them)
@@ -715,30 +491,15 @@ void WDRCompressor::sorting_pass_decode(double T, ArithmeticCoder& coder, Adapti
         }
     }
     
-    // Debug: Log ICS map state after removal
-    {
-        std::ostringstream oss;
-        oss << "DECODER: After removal: ICS_map_size=" << new_ics_to_array_map.size() 
-            << " (removed " << (ics_to_array_map.size() - new_ics_to_array_map.size()) << " indices)";
-        if (new_ics_to_array_map.size() <= 10) {
-            oss << " ICS_map=[";
-            for (size_t i = 0; i < new_ics_to_array_map.size(); i++) {
-                if (i > 0) oss << ", ";
-                oss << new_ics_to_array_map[i];
-            }
-            oss << "]";
-        }
-        WDR_DEBUG_LOG(oss.str());
-    }
-    
     ics_to_array_map = new_ics_to_array_map;
 }
 
 void WDRCompressor::refinement_pass_decode(double T, ArithmeticCoder& coder, AdaptiveModel& refinement_model) {
-    for (auto& pair : SCS_) {
+    for (size_t idx = 0; idx < SCS_.size(); idx++) {
+        auto& pair = SCS_[idx];
         double center = pair.second;
         
-        // Calculate interval
+        // Calculate interval using unsigned magnitude
         double low = center - T;
         double high = center + T;
         
@@ -753,9 +514,14 @@ void WDRCompressor::refinement_pass_decode(double T, ArithmeticCoder& coder, Ada
             center = (low + center) / 2.0;
         }
         
-        // Update center and value
+        // Reapply the stored sign (default positive if missing)
+        double sign = 1.0;
+        if (idx < scs_signs_.size() && scs_signs_[idx] == 0) {
+            sign = -1.0;
+        }
+        
         pair.second = center;
-        pair.first = center;  // For reconstruction
+        pair.first = sign * center;
     }
 }
 
