@@ -198,7 +198,10 @@ std::vector<double> WDRCompressor::decompress(const std::string &input_file) {
   sorting_model.start_model();
   refinement_model.start_model();
 
-  // API usage: Start the decoder with a default model
+  // Coder requires a default model to start decoding, 
+  // in practice the states define the model used for decoding.
+  // we will fix this later, for now we bypass the api requirement by using 
+  // the sorting_model.
   coder.start_decoding(bit_stream, sorting_model);
 
   scs_to_array_pos_.clear();
