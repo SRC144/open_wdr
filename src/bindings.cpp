@@ -16,6 +16,8 @@
 #include "wdr_compressor.hpp"
 #include <stdexcept>
 #include <vector>
+#include <string>
+#include <cstdint>
 
 namespace py = pybind11;
 
@@ -136,5 +138,64 @@ PYBIND11_MODULE(coder, m) {
           "Raises:\n"
           "    RuntimeError: If decompression fails or the file is invalid",
           py::arg("input_filepath"));
+
+    m.def(
+        "compress_tile",
+        [](py::array_t<double> coeffs, double initial_T, int num_passes) {
+            if (coeffs.ndim() != 1) {
+                throw std::invalid_argument("Coefficients array must be 1D");
+            }
+            if (coeffs.size() == 0) {
+                throw std::invalid_argument("Coefficients array must not be empty");
+            }
+            if (initial_T <= 0.0) {
+                throw std::invalid_argument("initial_T must be > 0");
+            }
+            if (num_passes <= 0) {
+                throw std::invalid_argument("Number of passes must be positive");
+            }
+
+            auto buf = coeffs.request();
+            auto *ptr = static_cast<double *>(buf.ptr);
+            std::vector<double> coeffs_vec(ptr, ptr + coeffs.size());
+
+            WDRCompressor compressor(num_passes);
+            std::vector<uint8_t> payload = compressor.compress_tile(coeffs_vec, initial_T);
+            return py::bytes(reinterpret_cast<const char *>(payload.data()), payload.size());
+        },
+        py::arg("coeffs"),
+        py::arg("initial_T"),
+        py::arg("num_passes") = 26,
+        "Compress a tile worth of coefficients and return the encoded payload as bytes."
+    );
+
+    m.def(
+        "decompress_tile",
+        [](py::bytes payload, double initial_T, uint64_t coeff_count, int num_passes) {
+            if (coeff_count == 0) {
+                throw std::invalid_argument("coeff_count must be > 0");
+            }
+            if (initial_T <= 0.0) {
+                throw std::invalid_argument("initial_T must be > 0");
+            }
+            if (num_passes <= 0) {
+                throw std::invalid_argument("Number of passes must be positive");
+            }
+
+            std::string payload_str = payload;
+            std::vector<uint8_t> payload_vec(payload_str.begin(), payload_str.end());
+
+            WDRCompressor compressor(num_passes);
+            std::vector<double> coeffs_vec =
+                compressor.decompress_tile(payload_vec, initial_T, coeff_count);
+
+            return py::cast(coeffs_vec);
+        },
+        py::arg("payload"),
+        py::arg("initial_T"),
+        py::arg("coeff_count"),
+        py::arg("num_passes") = 26,
+        "Decompress a tile payload back into flattened coefficients."
+    );
 }
 

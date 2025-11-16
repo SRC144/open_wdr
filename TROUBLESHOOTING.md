@@ -24,7 +24,7 @@ Then rerun the standard flow:
 python -m venv .venv && source .venv/bin/activate  # or .venv\Scripts\activate
 pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
-pip install -e .
+pip install -e . --no-build-isolation  # reuse local toolchain when offline
 ```
 
 ## 2. Common failures
@@ -45,7 +45,7 @@ If things stay broken, wipe build artefacts and start fresh:
 
 ```bash
 rm -rf build/ *.egg-info dist/ wdr/coder.cpython-*.so
-pip install -e . --force-reinstall --no-cache-dir
+pip install -e . --force-reinstall --no-cache-dir --no-build-isolation
 ```
 
 Windows PowerShell / CMD:
@@ -54,5 +54,5 @@ Windows PowerShell / CMD:
 rmdir /s /q build
 rmdir /s /q *.egg-info dist
 del wdr\\coder.cpython-*.pyd
-pip install -e . --force-reinstall --no-cache-dir
+pip install -e . --force-reinstall --no-cache-dir --no-build-isolation
 ```

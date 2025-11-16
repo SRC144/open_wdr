@@ -25,7 +25,8 @@ Wavelet Difference Reduction (WDR) combines discrete wavelet transforms, progres
    ```
 4. **Build + install**
    ```bash
-   pip install -e .
+   pip install -e .                # regular environments
+   pip install -e . --no-build-isolation  # air-gapped/offline
    ```
 
 `pip install -e .` configures CMake, builds the native `wdr.coder` module, and exposes it as a Python package. If the build fails, confirm you have Python ≥3.8, CMake ≥3.15, and a C++17 compiler. Detailed diagnostics, platform notes, and alternative setups live in `TROUBLESHOOTING.md`.
@@ -33,7 +34,7 @@ Wavelet Difference Reduction (WDR) combines discrete wavelet transforms, progres
 ## Sample Assets & Outputs
 
 - Source fixtures live in `assets/` (e.g., `assets/lenna.png`, `assets/pattern.png`) for quick demos.
-- Generated artifacts go under `compressed/` (CLI runs) and `compressed/tests/` (test suite). When you pass only a filename to `main.py`, it automatically saves the `.wdr` and reconstructed image inside `compressed/`.
+- Generated artifacts go under `compressed/` (CLI runs) and `compressed/tests/` (test suite). When you pass only a filename to `main.py`, it automatically saves the `.wdrt` stream and reconstructed image inside `compressed/`.
 
 ## Development & Testing (optional)
 
@@ -77,23 +78,26 @@ hlp.save_image("reconstructed.png", reconstructed)
 
 Quantization helpers (`calculate_quantization_step`, `quantize_coeffs`, `dequantize_coeffs`) live in `wdr.utils.helpers` and remain optional—set `--quantization-step 0` (or skip quantization) for lossless workflows.
 
+Need to work on gigapixel imagery? The native worker also exposes `compress_tile(flat_coeffs, initial_T)` / `decompress_tile(payload, initial_T, coeff_count)` so you can stream tiles manually (the CLI uses the same APIs under the hood).
+
 ### CLI
 
 ```bash
-python main.py input.png output.wdr \
+python main.py input.png output.wdrt \
   --scales 2 \
   --wavelet bior4.4 \
   --num-passes 26 \
+  --tile-width 512 --tile-height 512 \
   --reconstructed recon.png  # optional file for decoded image
 ```
 
-If you omit directory components in `output.wdr` or `--reconstructed`, the script writes them into `compressed/` automatically; provide full paths when you want a different destination.
+If you omit directory components in `output.wdrt` or `--reconstructed`, the script writes them into `compressed/` automatically; provide full paths when you want a different destination. Power users can also set `--tile-cache-dir` to reuse a specific disk location or `--keep-tile-cache` to inspect the flattened tile cache between passes.
 
 ### Benchmarking
 
 `main.py` prints two compression ratios:
-- **Algorithm CR**: bytes(coeff array) / bytes(.wdr)
-- **True System CR**: bytes(raw pixels) / bytes(.wdr)
+- **Algorithm CR**: bytes(coeff array) / bytes(.wdrt)
+- **True System CR**: bytes(raw pixels) / bytes(.wdrt)
 
 Quantization (optional) can substantially improve both; disable with `--quantization-step 0` for strictly lossless flows.
 

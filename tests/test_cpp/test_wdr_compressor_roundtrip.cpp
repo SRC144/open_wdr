@@ -304,6 +304,47 @@ TEST(WDRCompressorRoundTripTest, DifferentNumPasses) {
     std::remove(test_file.c_str());
 }
 
+// Test: TileCompressDecompress_RoundTrip
+TEST(WDRCompressorRoundTripTest, TileCompressDecompressRoundTrip) {
+    std::vector<double> coeffs = {128.0, -64.0, 32.0, -16.0, 8.0, -4.0};
+    constexpr int kPasses = 12;
+    WDRCompressor comp(kPasses);
+    double initial_T = comp.calculate_initial_T(coeffs);
+    auto payload = comp.compress_tile(coeffs, initial_T);
+
+    ASSERT_FALSE(payload.empty());
+
+    auto recovered = comp.decompress_tile(payload, initial_T, coeffs.size());
+    ASSERT_EQ(recovered.size(), coeffs.size());
+    const double tolerance = initial_T / std::pow(2.0, kPasses);
+    for (size_t i = 0; i < coeffs.size(); ++i) {
+        EXPECT_NEAR(recovered[i], coeffs[i], tolerance) << "Mismatch at index " << i;
+    }
+}
+
+// Test: TileCompressDecompress_MultipleTilesEquivalent
+TEST(WDRCompressorRoundTripTest, TileCompressMatchesFullCompressor) {
+    std::vector<double> coeffs = {200.0, -150.0, 75.0, -37.5, 18.75, -9.375};
+    WDRCompressor comp(16);
+    double initial_T = comp.calculate_initial_T(coeffs);
+
+    // Reference: full-file compression
+    const std::string reference_file = "/tmp/test_tile_vs_full.wdr";
+    comp.compress(coeffs, reference_file);
+    auto full_decoded = comp.decompress(reference_file);
+
+    // Tile path
+    auto payload = comp.compress_tile(coeffs, initial_T);
+    auto tile_decoded = comp.decompress_tile(payload, initial_T, coeffs.size());
+
+    ASSERT_EQ(full_decoded.size(), tile_decoded.size());
+    for (size_t i = 0; i < coeffs.size(); ++i) {
+        EXPECT_NEAR(tile_decoded[i], full_decoded[i], 1e-6) << "Mismatch at index " << i;
+    }
+
+    std::remove(reference_file.c_str());
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

@@ -22,9 +22,6 @@
 
 #include "adaptive_model.hpp"
 #include "arithmetic_coder.hpp"
-#include "bit_stream.hpp"
-#include "wdr_file_format.hpp"
-#include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <list>
@@ -81,12 +78,34 @@ public:
                 const std::string &output_file);
 
   /**
+   * Compress a single tile worth of coefficients into an in-memory payload.
+   *
+   * @param coeffs Input coefficients for the tile (1D array)
+   * @param initial_T Global initial threshold shared across tiles
+   * @return Arithmetic-coded payload representing the tile
+   */
+  std::vector<uint8_t> compress_tile(const std::vector<double> &coeffs,
+                                     double initial_T) const;
+
+  /**
    * Decompress coefficients from a .wdr file.
    *
    * @param input_file Input file path
    * @return Decompressed coefficients (1D array)
    */
   std::vector<double> decompress(const std::string &input_file);
+
+  /**
+   * Decompress a single tiled payload into coefficients.
+   *
+   * @param payload Arithmetic-coded bytes for the tile
+   * @param initial_T Global initial threshold shared across tiles
+   * @param coeff_count Number of coefficients expected in the tile
+   * @return Decompressed coefficient vector
+   */
+  std::vector<double>
+  decompress_tile(const std::vector<uint8_t> &payload, double initial_T,
+                  uint64_t coeff_count) const;
 
   // Test-friendly public accessors for unit testing
   // These methods are public to allow comprehensive unit testing
@@ -100,12 +119,12 @@ public:
   /**
    * Apply differential coding (public for testing).
    */
-  std::vector<int> differential_encode(const std::vector<int> &indices);
+  std::vector<int> differential_encode(const std::vector<int> &indices) const;
 
   /**
    * Apply inverse differential coding (public for testing).
    */
-  std::vector<int> differential_decode(const std::vector<int> &diff_indices);
+  std::vector<int> differential_decode(const std::vector<int> &diff_indices) const;
 
 private:
   int num_passes_;
@@ -154,21 +173,21 @@ private:
     WDRSymbol(SymbolContext c, uint8_t s) : context(c), symbol(s) {}
   };
 
-  // Coefficient sets for encoding/decoding
-  const std::vector<double> *original_coeffs_ptr_ =
-      nullptr; // Pointer to original coefficients (for fast access)
-  std::list<size_t> ICS_indices_list_; // Double linked list of indices in the
-                                       // ICS (for fast removal and iteration)
-  std::vector<std::pair<double, double>>
-      SCS_;                 // Significant Coefficient Set: (value, center)
-  std::vector<double> TPS_; // Temporary Pass Set
+  struct EncoderState {
+    const std::vector<double> *coeffs = nullptr;
+    std::list<size_t> ics_indices;
+    std::vector<std::pair<double, double>> scs;
+    std::vector<double> tps;
+  };
 
-  // For decoding: track which positions in the original array have been decoded
-  std::vector<size_t>
-      scs_to_array_pos_; // Maps SCS index to array position (for decoding)
-  std::vector<int>
-      scs_signs_; // Maps SCS index to sign (1 for positive, 0 for negative)
-  std::vector<double> reconstructed_array_; // Reconstructed coefficient array
+  struct DecoderState {
+    std::list<size_t> ics_indices;
+    std::vector<std::pair<double, double>> scs;
+    std::vector<size_t> scs_to_array_pos;
+    std::vector<int> scs_signs;
+    std::vector<double> decoded_centers;
+    std::vector<double> reconstructed_array;
+  };
 
   /**
    * Sorting pass (encoding).
@@ -179,7 +198,8 @@ private:
    * @param T Current threshold
    * @param symbol_stream The master list of symbols to append to
    */
-  void sorting_pass_encode(double T, std::vector<WDRSymbol> &symbol_stream);
+  void sorting_pass_encode(double T, std::vector<WDRSymbol> &symbol_stream,
+                           EncoderState &state) const;
 
   /**
    * Refinement pass (encoding).
@@ -190,7 +210,8 @@ private:
    * @param T Current threshold
    * @param symbol_stream The master list of symbols to append to
    */
-  void refinement_pass_encode(double T, std::vector<WDRSymbol> &symbol_stream);
+  void refinement_pass_encode(double T, std::vector<WDRSymbol> &symbol_stream,
+                              EncoderState &state) const;
 
   /**
    * Sorting pass (decoding).
@@ -211,7 +232,8 @@ private:
                            AdaptiveModel &sorting_model,
                            std::vector<size_t> &decoded_positions,
                            std::vector<int> &decoded_signs,
-                           std::list<size_t> &ics_to_array_map);
+                           std::vector<double> &decoded_centers,
+                           std::list<size_t> &ics_to_array_map) const;
 
   /**
    * Refinement pass (decoding).
@@ -224,7 +246,8 @@ private:
    * @param refinement_model Adaptive model for refinement bits
    */
   void refinement_pass_decode(double T, ArithmeticCoder &coder,
-                              AdaptiveModel &refinement_model);
+                              AdaptiveModel &refinement_model,
+                              DecoderState &state) const;
 
   /**
    * @brief Performs the final arithmetic encoding step (Encoder's state
@@ -240,10 +263,10 @@ private:
    * @param sorting_model The GLOBAL adaptive model for the sorting pass.
    * @param refinement_model The GLOBAL adaptive model for the refinement pass.
    */
-  void
-  arithmetic_encode_stream(const std::vector<WDRSymbol> &symbol_stream_for_pass,
-                           ArithmeticCoder &coder, AdaptiveModel &sorting_model,
-                           AdaptiveModel &refinement_model);
+  void arithmetic_encode_stream(
+      const std::vector<WDRSymbol> &symbol_stream_for_pass,
+      ArithmeticCoder &coder, AdaptiveModel &sorting_model,
+      AdaptiveModel &refinement_model) const;
 
   /**
    * @brief Helper to write a binary-reduced value to the symbol stream.
@@ -256,7 +279,7 @@ private:
    * @param sign The sign of the coefficient (true=positive, false=negative).
    */
   void write_binary_reduced(std::vector<WDRSymbol> &symbol_stream, int value,
-                            bool sign);
+                            bool sign) const;
 
   /**
    * @brief Helper to read one binary-expanded value during decode.
@@ -270,7 +293,7 @@ private:
    * @return The reconstructed (differential coded) index.
    */
   int read_binary_expanded(ArithmeticCoder &coder, AdaptiveModel &sorting_model,
-                           bool &sign_out);
+                           bool &sign_out) const;
 
   /**
    * Write file header.

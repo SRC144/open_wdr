@@ -1,9 +1,10 @@
 #include "wdr_compressor.hpp"
-#include <algorithm>
+#include "bit_stream.hpp"
+#include "wdr_file_format.hpp"
 #include <cmath>
 #include <cstring>
-#include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <list>
 #include <sstream>
 #include <stdexcept>
@@ -56,107 +57,26 @@ void WDRCompressor::compress(const std::vector<double> &coeffs,
     throw std::invalid_argument("Empty coefficient array");
   }
 
-  // Calculate initial threshold
   initial_T_ = calculate_initial_T(coeffs);
+  const auto payload = compress_tile(coeffs, initial_T_);
 
-  // Set pointer to original coefficients
-  original_coeffs_ptr_ = &coeffs;
-
-  // Initialize coefficient set structures
-  ICS_indices_list_.clear();
-  SCS_.clear();
-  TPS_.clear();
-
-  // Initialize ICS_indices_list_ with all coefficients indices
-  for (size_t i = 0; i < coeffs.size(); i++) {
-    ICS_indices_list_.push_back(i);
-  }
-
-  // Open output file
   std::ofstream file(output_file, std::ios::binary);
   if (!file.is_open()) {
     throw std::runtime_error("Failed to open output file: " + output_file);
   }
 
-  // Write header (we'll update data_size later)
-  uint64_t data_size_placeholder = 0;
-  uint64_t num_coeffs = coeffs.size();
-  write_header(file, initial_T_, num_coeffs, data_size_placeholder);
-
-  // Get position of data start
-  std::streampos data_start_pos = file.tellp();
-
-  /// Create GLOBAL models and coder. They persist for the entire compression
-  /// process.
-
-  // The sorting_model uses a 6-symbol alphabet to resolve the
-  // ambiguity between a differential index of 0 and 1.
-  //
-  // The 0/1 Ambiguity:
-  // Binary Reduction = "remove the MSB".
-  // - Value 1 (binary '1') -> remove MSB '1' -> empty bit list '[]'
-  // - Value 0 (binary '0') -> (no MSB)     -> empty bit list '[]'
-  //
-  // To solve this, we define 4 EOM symbols:
-  // 0 = bit '0'
-  // 1 = bit '1'
-  // 2 = POS_SIGN (EOM, implies value 1)
-  // 3 = NEG_SIGN (EOM, implies value 1)
-  // 4 = ZERO_POS (EOM, implies value 0)
-  // 5 = ZERO_NEG (EOM, implies value 0)
-  AdaptiveModel sorting_model(6);    // 0-5
-  AdaptiveModel refinement_model(2); // 0-1
-  sorting_model.start_model();
-  refinement_model.start_model();
-
-  BitOutputStream bit_stream(file);
-  ArithmeticCoder coder;
-  coder.start_encoding(bit_stream, sorting_model); // Start with default
-  // we bypass the api requirement by using the sorting_model. Its a temporary
-  // fix.
-
-  // Main compression loop - *generates* tagged state symbols (SORTING_PASS and
-  // REFINEMENT_PASS)
-  double T = initial_T_;
-  for (int pass = 0; pass < num_passes_; pass++) {
-    // Create a TEMPORARY vector for this pass only
-    // This keeps symbol memory usage at O(1) relative to the whole file
-    std::vector<WDRSymbol> pass_symbol_stream;
-
-    // Sorting pass - appends to symbol_stream
-    sorting_pass_encode(T, pass_symbol_stream);
-
-    // Refinement pass - appends to symbol_stream
-    refinement_pass_encode(T, pass_symbol_stream);
-
-    // "FLUSH" this pass's symbols to the GLOBAL persistent coder
-    arithmetic_encode_stream(pass_symbol_stream, coder, sorting_model,
-                             refinement_model);
-
-    // Move coefficients from TPS to SCS with initial reconstruction value
-    for (double val : TPS_) {
-      double center = T + T / 2.0; // 1.5*T
-      SCS_.push_back(std::make_pair(val, center));
-    }
-
-    TPS_.clear();
-
-    // Update threshold
-    T = T / 2.0;
-  }
-
-  // Tell the GLOBAL persistent coder we are finished
-  coder.done_encoding();
-  bit_stream.flush();
-
-  // Get position of data end
-  std::streampos data_end_pos = file.tellp();
-  uint64_t data_size = static_cast<uint64_t>(data_end_pos - data_start_pos);
-
-  // Rewrite header with correct data size
-  file.seekp(0);
+  const uint64_t num_coeffs = coeffs.size();
+  const uint64_t data_size = payload.size();
   write_header(file, initial_T_, num_coeffs, data_size);
 
+  if (!payload.empty()) {
+    file.write(reinterpret_cast<const char *>(payload.data()),
+               static_cast<std::streamsize>(payload.size()));
+  }
+
+  if (!file.good()) {
+    throw std::runtime_error("Failed to write compressed payload to file");
+  }
   file.close();
 }
 
@@ -177,7 +97,7 @@ void WDRCompressor::compress(const std::vector<double> &coeffs,
 void WDRCompressor::arithmetic_encode_stream(
     const std::vector<WDRSymbol> &symbol_stream_for_pass,
     ArithmeticCoder &coder, AdaptiveModel &sorting_model,
-    AdaptiveModel &refinement_model) {
+    AdaptiveModel &refinement_model) const {
   // Iterate over the symbols for the current pass and encode them using the
   // GLOBAL models
   for (const WDRSymbol &sym : symbol_stream_for_pass) {
@@ -207,84 +127,150 @@ std::vector<double> WDRCompressor::decompress(const std::string &input_file) {
   initial_T_ = initial_T;
   num_passes_ = num_passes;
 
-  ICS_indices_list_.clear();
-  SCS_.clear();
-  TPS_.clear();
+  std::vector<uint8_t> payload(data_size);
+  if (data_size > 0) {
+    file.read(reinterpret_cast<char *>(payload.data()),
+              static_cast<std::streamsize>(data_size));
+    if (static_cast<uint64_t>(file.gcount()) != data_size) {
+      throw std::runtime_error("Compressed data truncated");
+    }
+  }
 
-  BitInputStream bit_stream(file);
-  ArithmeticCoder coder;
+  file.close();
+  return decompress_tile(payload, initial_T_, num_coeffs);
+}
 
-  // Create and initialize models for the state machine
+std::vector<uint8_t>
+WDRCompressor::compress_tile(const std::vector<double> &coeffs,
+                             double initial_T) const {
+  if (coeffs.empty()) {
+    throw std::invalid_argument("Empty coefficient array");
+  }
+  if (initial_T <= 0.0) {
+    throw std::invalid_argument("initial_T must be > 0");
+  }
 
-  // 0,1,POS(2),NEG(3),ZERO_POS(4),ZERO_NEG(5) See compress() on this file for
-  // details
-  AdaptiveModel sorting_model(6);
-  AdaptiveModel refinement_model(2); // 0,1
+  EncoderState state;
+  state.coeffs = &coeffs;
+  for (size_t i = 0; i < coeffs.size(); ++i) {
+    state.ics_indices.push_back(i);
+  }
 
-  // API usage: Initialize models
+  AdaptiveModel sorting_model(6);    // 0-5
+  AdaptiveModel refinement_model(2); // 0-1
   sorting_model.start_model();
   refinement_model.start_model();
 
-  // Coder requires a default model to start decoding,
-  // in practice the states define the model used for decoding.
-  // we will fix this later, for now we bypass the api requirement by using
-  // the sorting_model.
-  coder.start_decoding(bit_stream, sorting_model);
+  std::stringstream buffer(std::ios::in | std::ios::out | std::ios::binary);
+  BitOutputStream bit_stream(buffer);
+  ArithmeticCoder coder;
+  coder.start_encoding(bit_stream, sorting_model);
 
-  scs_to_array_pos_.clear();
-  scs_signs_.clear();
-  reconstructed_array_.resize(num_coeffs, 0.0);
+  double T = initial_T;
+  for (int pass = 0; pass < num_passes_; pass++) {
+    std::vector<WDRSymbol> pass_symbol_stream;
 
-  std::list<size_t> ics_to_array_map;
-  for (size_t i = 0; i < num_coeffs; i++) {
-    ics_to_array_map.push_back(i);
+    sorting_pass_encode(T, pass_symbol_stream, state);
+    refinement_pass_encode(T, pass_symbol_stream, state);
+
+    arithmetic_encode_stream(pass_symbol_stream, coder, sorting_model,
+                             refinement_model);
+
+    for (double val : state.tps) {
+      double center = T + T / 2.0;
+      state.scs.push_back(std::make_pair(val, center));
+    }
+    state.tps.clear();
+
+    T = T / 2.0;
   }
 
-  double T = initial_T_;
+  coder.done_encoding();
+  bit_stream.flush();
 
-  // Run the state machine
+  const std::string payload_str = buffer.str();
+  return std::vector<uint8_t>(payload_str.begin(), payload_str.end());
+}
+
+std::vector<double>
+WDRCompressor::decompress_tile(const std::vector<uint8_t> &payload,
+                               double initial_T, uint64_t coeff_count) const {
+  if (coeff_count == 0) {
+    throw std::invalid_argument("coeff_count must be > 0");
+  }
+  if (initial_T <= 0.0) {
+    throw std::invalid_argument("initial_T must be > 0");
+  }
+
+  std::stringstream buffer(std::ios::in | std::ios::out | std::ios::binary);
+  if (!payload.empty()) {
+    buffer.write(reinterpret_cast<const char *>(payload.data()),
+                 static_cast<std::streamsize>(payload.size()));
+    buffer.seekg(0);
+  }
+
+  BitInputStream bit_stream(buffer);
+  ArithmeticCoder coder;
+
+  AdaptiveModel sorting_model(6);
+  AdaptiveModel refinement_model(2);
+  sorting_model.start_model();
+  refinement_model.start_model();
+
+  coder.start_decoding(bit_stream, sorting_model);
+
+  DecoderState state;
+  state.reconstructed_array.assign(static_cast<size_t>(coeff_count), 0.0);
+  for (size_t i = 0; i < coeff_count; ++i) {
+    state.ics_indices.push_back(i);
+  }
+
+  double T = initial_T;
+
   for (int pass = 0; pass < num_passes_; pass++) {
-    // State 1: Sorting Pass
     std::vector<size_t> pass_decoded_positions;
     std::vector<int> pass_decoded_signs;
+    state.decoded_centers.clear();
 
-    // Call 6-argument version, per HPP
     sorting_pass_decode(T, coder, sorting_model, pass_decoded_positions,
-                        pass_decoded_signs, ics_to_array_map);
+                        pass_decoded_signs, state.decoded_centers,
+                        state.ics_indices);
 
-    // State 2: Refinement Pass
-    refinement_pass_decode(T, coder, refinement_model);
+    refinement_pass_decode(T, coder, refinement_model, state);
 
-    // Move coefficients from TPS to SCS
     for (size_t i = 0; i < pass_decoded_positions.size(); i++) {
       size_t array_pos = pass_decoded_positions[i];
       int sign = pass_decoded_signs[i];
-      double center = TPS_[i]; // Unsigned center
-
+      double center = state.decoded_centers[i];
       double signed_value = (sign == 1) ? center : -center;
-      SCS_.push_back(std::make_pair(signed_value, center));
 
-      scs_to_array_pos_.push_back(array_pos);
-      scs_signs_.push_back(sign);
+      state.scs.push_back(std::make_pair(signed_value, center));
+      state.scs_to_array_pos.push_back(array_pos);
+      state.scs_signs.push_back(sign);
     }
-    TPS_.clear();
+    state.decoded_centers.clear();
 
-    // Update reconstructed array
-    for (size_t i = 0; i < SCS_.size(); i++) {
-      size_t array_pos = scs_to_array_pos_[i];
-      double reconstructed_value = SCS_[i].first; // Signed, refined value
-      reconstructed_array_[array_pos] = reconstructed_value;
+    for (size_t i = 0; i < state.scs.size(); i++) {
+      size_t array_pos = state.scs_to_array_pos[i];
+      double reconstructed_value = state.scs[i].first;
+      state.reconstructed_array[array_pos] = reconstructed_value;
     }
 
     T = T / 2.0;
   }
 
-  file.close();
-  return reconstructed_array_;
+  return state.reconstructed_array;
 }
 
 void WDRCompressor::sorting_pass_encode(double T,
-                                        std::vector<WDRSymbol> &symbol_stream) {
+                                        std::vector<WDRSymbol> &symbol_stream,
+                                        EncoderState &state) const {
+  if (state.coeffs == nullptr) {
+    throw std::invalid_argument(
+        "EncoderState.coeffs must be set before sorting_pass_encode");
+  }
+  state.tps.clear();
+
   std::vector<int> indices;
   std::vector<int> signs;
 
@@ -295,16 +281,16 @@ void WDRCompressor::sorting_pass_encode(double T,
   std::vector<std::list<size_t>::iterator> iterators_to_erase;
 
   int current_list_index = 0;
-  for (auto it = ICS_indices_list_.begin(); it != ICS_indices_list_.end();
+  for (auto it = state.ics_indices.begin(); it != state.ics_indices.end();
        ++it) {
     // Get the coefficient value from the original coefficients
-    double val = (*original_coeffs_ptr_)[*it];
+    double val = (*(state.coeffs))[*it];
 
     // If the coefficient is significant, we save its list index and sign.
     if (std::abs(val) >= T) {
       indices.push_back(current_list_index);
       signs.push_back(val >= 0 ? 1 : 0);
-      TPS_.push_back(val);
+      state.tps.push_back(val);
 
       // Save the iterator to erase it
       iterators_to_erase.push_back(it);
@@ -314,12 +300,12 @@ void WDRCompressor::sorting_pass_encode(double T,
 
   // Remove the significant coefficients from the ICS_indices_list_.
   for (auto it : iterators_to_erase) {
-    ICS_indices_list_.erase(it); // This is O(1) (double linked list)
+    state.ics_indices.erase(it); // This is O(1) (double linked list)
   }
 
   // Step 2: Calculate count of significant coefficients
   int count = static_cast<int>(indices.size());
-  int max_count = static_cast<int>(ICS_indices_list_.size() + count);
+  int max_count = static_cast<int>(state.ics_indices.size() + count);
 
   int bits_needed = 1;
   if (max_count > 0) {
@@ -346,10 +332,11 @@ void WDRCompressor::sorting_pass_encode(double T,
 }
 
 void WDRCompressor::refinement_pass_encode(
-    double T, std::vector<WDRSymbol> &symbol_stream) {
+    double T, std::vector<WDRSymbol> &symbol_stream,
+    EncoderState &state) const {
 
   // Refine the coefficients
-  for (auto &pair : SCS_) {
+  for (auto &pair : state.scs) {
     double val = pair.first;
     double center = pair.second;
     double abs_val = std::abs(val);
@@ -377,10 +364,12 @@ void WDRCompressor::sorting_pass_decode(double T, ArithmeticCoder &coder,
                                         AdaptiveModel &sorting_model,
                                         std::vector<size_t> &decoded_positions,
                                         std::vector<int> &decoded_signs,
-                                        std::list<size_t> &ics_to_array_map) {
+                                        std::vector<double> &decoded_centers,
+                                        std::list<size_t> &ics_to_array_map) const {
   // Clear decoded positions and signs
   decoded_positions.clear();
   decoded_signs.clear();
+  decoded_centers.clear();
 
   // Calculate max_count and bits_needed
   int max_count = static_cast<int>(ics_to_array_map.size());
@@ -447,7 +436,7 @@ void WDRCompressor::sorting_pass_decode(double T, ArithmeticCoder &coder,
     // Save the data
     decoded_positions.push_back(*it); // *it is the *original array index*
     decoded_signs.push_back(sign);
-    TPS_.push_back(T + T / 2.0);
+    decoded_centers.push_back(T + T / 2.0);
 
     // Erase from the list (O(1))
     ics_to_array_map.erase(it);
@@ -455,10 +444,11 @@ void WDRCompressor::sorting_pass_decode(double T, ArithmeticCoder &coder,
 }
 
 void WDRCompressor::refinement_pass_decode(double T, ArithmeticCoder &coder,
-                                           AdaptiveModel &refinement_model) {
+                                           AdaptiveModel &refinement_model,
+                                           DecoderState &state) const {
   // Decode the coefficients in the SCS
-  for (size_t idx = 0; idx < SCS_.size(); idx++) {
-    auto &pair = SCS_[idx];
+  for (size_t idx = 0; idx < state.scs.size(); idx++) {
+    auto &pair = state.scs[idx];
     double center = pair.second; // Unsigned center
 
     // Calculate interval using unsigned magnitude
@@ -477,14 +467,14 @@ void WDRCompressor::refinement_pass_decode(double T, ArithmeticCoder &coder,
     }
 
     // Update the signed, refined value
-    double sign = (scs_signs_[idx] == 1) ? 1.0 : -1.0;
+    double sign = (state.scs_signs[idx] == 1) ? 1.0 : -1.0;
     pair.second = center;       // Update unsigned center
     pair.first = sign * center; // Update signed, refined value
   }
 }
 
 std::vector<int>
-WDRCompressor::differential_encode(const std::vector<int> &indices) {
+WDRCompressor::differential_encode(const std::vector<int> &indices) const {
   if (indices.empty()) {
     return {};
   }
@@ -500,7 +490,7 @@ WDRCompressor::differential_encode(const std::vector<int> &indices) {
 }
 
 std::vector<int>
-WDRCompressor::differential_decode(const std::vector<int> &diff_indices) {
+WDRCompressor::differential_decode(const std::vector<int> &diff_indices) const {
   if (diff_indices.empty()) {
     return {};
   }
@@ -516,7 +506,7 @@ WDRCompressor::differential_decode(const std::vector<int> &diff_indices) {
 }
 
 void WDRCompressor::write_binary_reduced(std::vector<WDRSymbol> &symbol_stream,
-                                         int value, bool sign) {
+                                         int value, bool sign) const {
   // Differential-coded indices are always >= 0
   if (value == 0) {
     // Handle the value '0' case explicitly.
@@ -546,7 +536,7 @@ void WDRCompressor::write_binary_reduced(std::vector<WDRSymbol> &symbol_stream,
 
 int WDRCompressor::read_binary_expanded(ArithmeticCoder &coder,
                                         AdaptiveModel &sorting_model,
-                                        bool &sign_out) {
+                                        bool &sign_out) const {
   std::vector<bool> bits; // Stores LSB-first bits
   int value = 0;
 
