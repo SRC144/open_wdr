@@ -27,6 +27,7 @@
 #include <cmath>
 #include <cstdint>
 #include <fstream>
+#include <list>
 #include <string>
 #include <utility>
 #include <vector>
@@ -126,8 +127,8 @@ private:
      * 2 = positive sign (End-of-Message symbol)
      * 3 = negative sign (End-of-Message symbol)
      * 4 = zero positive (End-of-Message symbol)
-     * 5 = zero negative (End-of-Message symbol) See arithmetic_encode_stream()
-     * for details
+     * 5 = zero negative (End-of-Message symbol) See compress() on
+     * wdr_compressor.cpp for details
      */
     SORTING_PASS,
 
@@ -154,7 +155,10 @@ private:
   };
 
   // Coefficient sets for encoding/decoding
-  std::vector<double> ICS_; // Insignificant Coefficient Set
+  const std::vector<double> *original_coeffs_ptr_ =
+      nullptr; // Pointer to original coefficients (for fast access)
+  std::list<size_t> ICS_indices_list_; // Double linked list of indices in the
+                                       // ICS (for fast removal and iteration)
   std::vector<std::pair<double, double>>
       SCS_;                 // Significant Coefficient Set: (value, center)
   std::vector<double> TPS_; // Temporary Pass Set
@@ -201,13 +205,13 @@ private:
    * @param decoded_positions Output: positions in the original array that were
    * decoded
    * @param decoded_signs Output: signs for decoded coefficients
-   * @param ics_to_array_map Mapping from ICS index to array position
+   * @param ics_to_array_map Mapping from ICS index to array position (double linked list)
    */
   void sorting_pass_decode(double T, ArithmeticCoder &coder,
                            AdaptiveModel &sorting_model,
                            std::vector<size_t> &decoded_positions,
                            std::vector<int> &decoded_signs,
-                           std::vector<size_t> &ics_to_array_map);
+                           std::list<size_t> &ics_to_array_map);
 
   /**
    * Refinement pass (decoding).
@@ -226,14 +230,20 @@ private:
    * @brief Performs the final arithmetic encoding step (Encoder's state
    * machine).
    *
-   * Iterates over the master symbol list and encodes each symbol using
-   * the correct adaptive model based on its context.
+   * Iterates over the symbol list for the current pass and encodes each symbol
+   * using the GLOBAL adaptive models for the sorting and refinement passes.
+   * This keeps memory usage low and allows for efficient encoding.
    *
-   * @param symbol_stream The complete, ordered list of symbols from all passes.
-   * @param out_stream The bit stream to write compressed data to.
+   * @param symbol_stream_for_pass The ordered list of symbols for the current
+   * pass.
+   * @param coder The arithmetic coder.
+   * @param sorting_model The GLOBAL adaptive model for the sorting pass.
+   * @param refinement_model The GLOBAL adaptive model for the refinement pass.
    */
-  void arithmetic_encode_stream(const std::vector<WDRSymbol> &symbol_stream,
-                                BitOutputStream &out_stream);
+  void
+  arithmetic_encode_stream(const std::vector<WDRSymbol> &symbol_stream_for_pass,
+                           ArithmeticCoder &coder, AdaptiveModel &sorting_model,
+                           AdaptiveModel &refinement_model);
 
   /**
    * @brief Helper to write a binary-reduced value to the symbol stream.
