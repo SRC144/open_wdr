@@ -46,9 +46,10 @@ python -m pytest tests/
 ### Native build + C++ tests
 
 ```bash
-cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
-ctest --test-dir build --output-on-failure
+pip install pybind11
+PYBIND11_DIR=$(python3 -c 'import pybind11, pathlib; print(pathlib.Path(pybind11.get_cmake_dir()))')
+cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release -Dpybind11_DIR="$PYBIND11_DIR"
+cmake --build build -j && ctest --test-dir build --output-on-failure
 ```
 
 Need to inspect the native build output? Re-run the first line without `-DBUILD_TESTING=ON` to build only the extension, or add `-DCMAKE_VERBOSE_MAKEFILE=ON` for more logs. The compiled module lands inside the package as `wdr/coder.cpython-<ver>-<platform>.so|pyd`.
@@ -87,6 +88,14 @@ python main.py input.png output.wdr \
 ```
 
 If you omit directory components in `output.wdr` or `--reconstructed`, the script writes them into `compressed/` automatically; provide full paths when you want a different destination.
+
+### Benchmarking
+
+`main.py` prints two compression ratios:
+- **Algorithm CR**: bytes(coeff array) / bytes(.wdr)
+- **True System CR**: bytes(raw pixels) / bytes(.wdr)
+
+Quantization (optional) can substantially improve both; disable with `--quantization-step 0` for strictly lossless flows.
 
 ## Documentation
 
