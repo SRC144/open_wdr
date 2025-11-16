@@ -124,8 +124,23 @@ void WDRCompressor::compress(const std::vector<double> &coeffs,
 void WDRCompressor::arithmetic_encode_stream(
     const std::vector<WDRSymbol> &symbol_stream, BitOutputStream &out_stream) {
 
-  // Create adaptive models for the state machine
-  AdaptiveModel sorting_model(5);    // 0,1,POS(2),NEG(3),ZERO(4)
+  // Create and initialize models for the state machine
+  // The sorting_model uses a 6-symbol alphabet to resolve the
+  // ambiguity between a differential index of 0 and 1.
+  //
+  // The 0/1 Ambiguity:
+  // Binary Reduction = "remove the MSB".
+  // - Value 1 (binary '1') -> remove MSB '1' -> empty bit list '[]'
+  // - Value 0 (binary '0') -> (no MSB)     -> empty bit list '[]'
+  //
+  // To solve this, we define 4 EOM symbols:
+  // 0 = bit '0'
+  // 1 = bit '1'
+  // 2 = POS_SIGN (EOM, implies value 1)
+  // 3 = NEG_SIGN (EOM, implies value 1)
+  // 4 = ZERO_POS (EOM, implies value 0)
+  // 5 = ZERO_NEG (EOM, implies value 0)
+  AdaptiveModel sorting_model(6);
   AdaptiveModel refinement_model(2); // 0,1
 
   // Initialize models
@@ -174,7 +189,9 @@ std::vector<double> WDRCompressor::decompress(const std::string &input_file) {
   ArithmeticCoder coder;
 
   // Create and initialize models for the state machine
-  AdaptiveModel sorting_model(5);    // 0,1,POS(2),NEG(3),ZERO(4)
+
+  // 0,1,POS(2),NEG(3),ZERO_POS(4),ZERO_NEG(5) See arithmetic_encode_stream() for details
+  AdaptiveModel sorting_model(6);    
   AdaptiveModel refinement_model(2); // 0,1
 
   // API usage: Initialize models
@@ -452,8 +469,11 @@ void WDRCompressor::write_binary_reduced(std::vector<WDRSymbol> &symbol_stream,
                                          int value, bool sign) {
   // Differential-coded indices are always >= 0
   if (value == 0) {
-    // Handle 0 as a special "ZERO_VAL" symbol
-    symbol_stream.push_back(WDRSymbol(SymbolContext::SORTING_PASS, 4));
+    // Handle the value '0' case explicitly.
+    // This resolves the 0/1 ambiguity (see comment in arithmetic_encode_stream).
+    // We send a unique, signed symbol for zero.
+    uint8_t zero_sym = sign ? 4 : 5; // 4 = ZERO_POS, 5 = ZERO_NEG
+    symbol_stream.push_back(WDRSymbol(SymbolContext::SORTING_PASS, zero_sym));
     return;
   }
 
@@ -494,8 +514,11 @@ int WDRCompressor::read_binary_expanded(ArithmeticCoder &coder,
     } else if (sym == 3) { // NEG_SIGN
       sign_out = false;
       break;
-    } else if (sym == 4) { // ZERO_VAL
-      sign_out = true;     // Sign is irrelevant
+    } else if (sym == 4) { // ZERO_POS
+      sign_out = true;
+      return 0;
+    } else if (sym == 5) { // ZERO_NEG
+      sign_out = false;
       return 0;
     } else {
       throw std::runtime_error("Invalid symbol decoded in sorting pass");

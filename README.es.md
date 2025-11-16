@@ -46,9 +46,10 @@ python -m pytest tests/
 ### Compilación nativa + pruebas C++
 
 ```bash
-cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
-ctest --test-dir build --output-on-failure
+pip install pybind11
+PYBIND11_DIR=$(python3 -c 'import pybind11, pathlib; print(pathlib.Path(pybind11.get_cmake_dir()))')
+cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release -Dpybind11_DIR="$PYBIND11_DIR"
+cmake --build build -j && ctest --test-dir build --output-on-failure
 ```
 
 ¿Solo necesita revisar la salida de CMake? Ejecute la primera línea sin `-DBUILD_TESTING=ON` para compilar el módulo, o agregue `-DCMAKE_VERBOSE_MAKEFILE=ON` para más registro. El artefacto aparece dentro del paquete como `wdr/coder.cpython-<ver>-<platform>.so|pyd`.
@@ -87,6 +88,14 @@ python main.py input.png output.wdr \
 ```
 
 Si omite el directorio en `output.wdr` o `--reconstructed`, el script los guarda automáticamente en `compressed/`; indique rutas completas si desea otra ubicación.
+
+### Benchmarking
+
+`main.py` imprime dos razones de compresión:
+- **CR del algoritmo**: bytes(array de coeficientes) / bytes(.wdr)
+- **CR del sistema real**: bytes(píxeles crudos) / bytes(.wdr)
+
+La cuantización (opcional) puede mejorar ambas de forma sustancial; desactívela con `--quantization-step 0` para flujos estrictamente sin pérdidas.
 
 ## Documentación
 
