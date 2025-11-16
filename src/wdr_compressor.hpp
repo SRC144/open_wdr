@@ -126,8 +126,8 @@ private:
      * 2 = positive sign (End-of-Message symbol)
      * 3 = negative sign (End-of-Message symbol)
      * 4 = zero positive (End-of-Message symbol)
-     * 5 = zero negative (End-of-Message symbol) See arithmetic_encode_stream()
-     * for details
+     * 5 = zero negative (End-of-Message symbol) See compress() on
+     * wdr_compressor.cpp for details
      */
     SORTING_PASS,
 
@@ -226,14 +226,20 @@ private:
    * @brief Performs the final arithmetic encoding step (Encoder's state
    * machine).
    *
-   * Iterates over the master symbol list and encodes each symbol using
-   * the correct adaptive model based on its context.
+   * Iterates over the symbol list for the current pass and encodes each symbol
+   * using the GLOBAL adaptive models for the sorting and refinement passes.
+   * This keeps memory usage low and allows for efficient encoding.
    *
-   * @param symbol_stream The complete, ordered list of symbols from all passes.
-   * @param out_stream The bit stream to write compressed data to.
+   * @param symbol_stream_for_pass The ordered list of symbols for the current
+   * pass.
+   * @param coder The arithmetic coder.
+   * @param sorting_model The GLOBAL adaptive model for the sorting pass.
+   * @param refinement_model The GLOBAL adaptive model for the refinement pass.
    */
-  void arithmetic_encode_stream(const std::vector<WDRSymbol> &symbol_stream,
-                                BitOutputStream &out_stream);
+  void
+  arithmetic_encode_stream(const std::vector<WDRSymbol> &symbol_stream_for_pass,
+                           ArithmeticCoder &coder, AdaptiveModel &sorting_model,
+                           AdaptiveModel &refinement_model);
 
   /**
    * @brief Helper to write a binary-reduced value to the symbol stream.

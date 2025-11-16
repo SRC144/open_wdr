@@ -80,51 +80,9 @@ void WDRCompressor::compress(const std::vector<double> &coeffs,
   // Get position of data start
   std::streampos data_start_pos = file.tellp();
 
-  // Create the master symbol stream
-  std::vector<WDRSymbol> symbol_stream;
+  /// Create GLOBAL models and coder. They persist for the entire compression
+  /// process.
 
-  // Main compression loop - *generates* tagged state symbols (SORTING_PASS and
-  // REFINEMENT_PASS)
-  double T = initial_T_;
-  for (int pass = 0; pass < num_passes_; pass++) {
-    // Sorting pass - appends to symbol_stream
-    sorting_pass_encode(T, symbol_stream);
-
-    // Refinement pass - appends to symbol_stream
-    refinement_pass_encode(T, symbol_stream);
-
-    // Move coefficients from TPS to SCS with initial reconstruction value
-    for (double val : TPS_) {
-      double center = T + T / 2.0; // 1.5*T
-      SCS_.push_back(std::make_pair(val, center));
-    }
-
-    TPS_.clear();
-
-    // Update threshold
-    T = T / 2.0;
-  }
-
-  // Final encoding step - *executes* the master symbol stream
-  BitOutputStream bit_stream(file);
-  arithmetic_encode_stream(symbol_stream, bit_stream);
-  bit_stream.flush(); // Ensure final byte is written
-
-  // Get position of data end
-  std::streampos data_end_pos = file.tellp();
-  uint64_t data_size = static_cast<uint64_t>(data_end_pos - data_start_pos);
-
-  // Rewrite header with correct data size
-  file.seekp(0);
-  write_header(file, initial_T_, num_coeffs, data_size);
-
-  file.close();
-}
-
-void WDRCompressor::arithmetic_encode_stream(
-    const std::vector<WDRSymbol> &symbol_stream, BitOutputStream &out_stream) {
-
-  // Create and initialize models for the state machine
   // The sorting_model uses a 6-symbol alphabet to resolve the
   // ambiguity between a differential index of 0 and 1.
   //
@@ -140,19 +98,69 @@ void WDRCompressor::arithmetic_encode_stream(
   // 3 = NEG_SIGN (EOM, implies value 1)
   // 4 = ZERO_POS (EOM, implies value 0)
   // 5 = ZERO_NEG (EOM, implies value 0)
-  AdaptiveModel sorting_model(6);
-  AdaptiveModel refinement_model(2); // 0,1
-
-  // Initialize models
+  AdaptiveModel sorting_model(6);    // 0-5
+  AdaptiveModel refinement_model(2); // 0-1
   sorting_model.start_model();
   refinement_model.start_model();
 
+  BitOutputStream bit_stream(file);
   ArithmeticCoder coder;
-  // API usage: Start encoding with a default model
-  coder.start_encoding(out_stream, sorting_model);
+  coder.start_encoding(bit_stream, sorting_model); // Start with default
+  // we bypass the api requirement by using the sorting_model. Its a temporary
+  // fix.
 
-  // Execute the script
-  for (const WDRSymbol &sym : symbol_stream) {
+  // Main compression loop - *generates* tagged state symbols (SORTING_PASS and
+  // REFINEMENT_PASS)
+  double T = initial_T_;
+  for (int pass = 0; pass < num_passes_; pass++) {
+    // Create a TEMPORARY vector for this pass only
+    // This keeps symbol memory usage at O(1) relative to the whole file
+    std::vector<WDRSymbol> pass_symbol_stream;
+
+    // Sorting pass - appends to symbol_stream
+    sorting_pass_encode(T, pass_symbol_stream);
+
+    // Refinement pass - appends to symbol_stream
+    refinement_pass_encode(T, pass_symbol_stream);
+
+    // "FLUSH" this pass's symbols to the GLOBAL persistent coder
+    arithmetic_encode_stream(pass_symbol_stream, coder, sorting_model,
+                             refinement_model);
+
+    // Move coefficients from TPS to SCS with initial reconstruction value
+    for (double val : TPS_) {
+      double center = T + T / 2.0; // 1.5*T
+      SCS_.push_back(std::make_pair(val, center));
+    }
+
+    TPS_.clear();
+
+    // Update threshold
+    T = T / 2.0;
+  }
+
+  // Tell the GLOBAL persistent coder we are finished
+  coder.done_encoding();
+  bit_stream.flush();
+
+  // Get position of data end
+  std::streampos data_end_pos = file.tellp();
+  uint64_t data_size = static_cast<uint64_t>(data_end_pos - data_start_pos);
+
+  // Rewrite header with correct data size
+  file.seekp(0);
+  write_header(file, initial_T_, num_coeffs, data_size);
+
+  file.close();
+}
+
+void WDRCompressor::arithmetic_encode_stream(
+    const std::vector<WDRSymbol> &symbol_stream_for_pass,
+    ArithmeticCoder &coder, AdaptiveModel &sorting_model,
+    AdaptiveModel &refinement_model) {
+  // Iterate over the symbols for the current pass and encode them using the
+  // GLOBAL models
+  for (const WDRSymbol &sym : symbol_stream_for_pass) {
     if (sym.context == SymbolContext::SORTING_PASS) {
       coder.encode_symbol(sym.symbol, sorting_model);
       sorting_model.update_model(sym.symbol); // API usage
@@ -162,8 +170,6 @@ void WDRCompressor::arithmetic_encode_stream(
       refinement_model.update_model(sym.symbol); // API usage
     }
   }
-
-  coder.done_encoding();
 }
 
 std::vector<double> WDRCompressor::decompress(const std::string &input_file) {
@@ -190,17 +196,18 @@ std::vector<double> WDRCompressor::decompress(const std::string &input_file) {
 
   // Create and initialize models for the state machine
 
-  // 0,1,POS(2),NEG(3),ZERO_POS(4),ZERO_NEG(5) See arithmetic_encode_stream() for details
-  AdaptiveModel sorting_model(6);    
+  // 0,1,POS(2),NEG(3),ZERO_POS(4),ZERO_NEG(5) See compress() on this file for
+  // details
+  AdaptiveModel sorting_model(6);
   AdaptiveModel refinement_model(2); // 0,1
 
   // API usage: Initialize models
   sorting_model.start_model();
   refinement_model.start_model();
 
-  // Coder requires a default model to start decoding, 
+  // Coder requires a default model to start decoding,
   // in practice the states define the model used for decoding.
-  // we will fix this later, for now we bypass the api requirement by using 
+  // we will fix this later, for now we bypass the api requirement by using
   // the sorting_model.
   coder.start_decoding(bit_stream, sorting_model);
 
@@ -473,8 +480,8 @@ void WDRCompressor::write_binary_reduced(std::vector<WDRSymbol> &symbol_stream,
   // Differential-coded indices are always >= 0
   if (value == 0) {
     // Handle the value '0' case explicitly.
-    // This resolves the 0/1 ambiguity (see comment in arithmetic_encode_stream).
-    // We send a unique, signed symbol for zero.
+    // This resolves the 0/1 ambiguity (see comment in compress() in this file
+    // for details). We send a unique, signed symbol for zero.
     uint8_t zero_sym = sign ? 4 : 5; // 4 = ZERO_POS, 5 = ZERO_NEG
     symbol_stream.push_back(WDRSymbol(SymbolContext::SORTING_PASS, zero_sym));
     return;
