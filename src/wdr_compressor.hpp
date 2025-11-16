@@ -125,6 +125,9 @@ private:
      * 1 = index bit 1
      * 2 = positive sign (End-of-Message symbol)
      * 3 = negative sign (End-of-Message symbol)
+     * 4 = zero positive (End-of-Message symbol)
+     * 5 = zero negative (End-of-Message symbol) See arithmetic_encode_stream()
+     * for details
      */
     SORTING_PASS,
 
