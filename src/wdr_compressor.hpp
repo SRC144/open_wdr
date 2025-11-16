@@ -27,6 +27,7 @@
 #include <cmath>
 #include <cstdint>
 #include <fstream>
+#include <list>
 #include <string>
 #include <utility>
 #include <vector>
@@ -154,7 +155,10 @@ private:
   };
 
   // Coefficient sets for encoding/decoding
-  std::vector<double> ICS_; // Insignificant Coefficient Set
+  const std::vector<double> *original_coeffs_ptr_ =
+      nullptr; // Pointer to original coefficients (for fast access)
+  std::list<size_t> ICS_indices_list_; // Double linked list of indices in the
+                                       // ICS (for fast removal and iteration)
   std::vector<std::pair<double, double>>
       SCS_;                 // Significant Coefficient Set: (value, center)
   std::vector<double> TPS_; // Temporary Pass Set
@@ -201,13 +205,13 @@ private:
    * @param decoded_positions Output: positions in the original array that were
    * decoded
    * @param decoded_signs Output: signs for decoded coefficients
-   * @param ics_to_array_map Mapping from ICS index to array position
+   * @param ics_to_array_map Mapping from ICS index to array position (double linked list)
    */
   void sorting_pass_decode(double T, ArithmeticCoder &coder,
                            AdaptiveModel &sorting_model,
                            std::vector<size_t> &decoded_positions,
                            std::vector<int> &decoded_signs,
-                           std::vector<size_t> &ics_to_array_map);
+                           std::list<size_t> &ics_to_array_map);
 
   /**
    * Refinement pass (decoding).
