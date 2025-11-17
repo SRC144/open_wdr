@@ -38,6 +38,7 @@ pip install -e . --no-build-isolation  # reuse local toolchain when offline
 | `CMake Error: Failed to fetch pybind11` | Check connectivity. As a fallback, clone pybind11 manually and run `cmake .. -Dpybind11_DIR=/path/to/pybind11`. |
 | `ModuleNotFoundError: No module named 'wdr.coder'` after a “successful” build | Ensure you’re in the repo root, the compiled `wdr/coder.*` exists, and rerun `pip install -e .`. Remove stale artifacts if needed (see below). |
 | `PermissionError` | Avoid `sudo pip` when using virtualenvs; on Windows, ensure the shell has write access to the repo folder. |
+| `decoder error -9` on huge TIFF files | Use `pip install -e . --no-build-isolation` to pick up the `tifffile` and `zarr` dependencies, then run the CLI with `--allow-large-image --tiff-reader tifffile`. If the crash happens only during metric evaluation, re-run with `--skip-metrics` (or let the CLI rebuild the original via tifffile if you want PSNR/MSE). |
 
 ## 3. Clean rebuild
 

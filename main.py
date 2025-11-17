@@ -36,13 +36,15 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 import numpy as np
 from PIL import Image
 
 from wdr import coder as wdr_coder
 from wdr.utils import helpers as hlp
+from wdr.utils.tile_reader import create_tile_reader
+from wdr.utils.batched_metrics import compute_batched_metrics
 
 
 def calculate_psnr(original: np.ndarray, compressed: np.ndarray) -> float:
@@ -82,6 +84,7 @@ def calculate_psnr(original: np.ndarray, compressed: np.ndarray) -> float:
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "compressed"
+PIL_DEFAULT_PIXEL_LIMIT = 178_956_970
 
 
 @dataclass
@@ -131,6 +134,60 @@ def _calculate_initial_threshold_from_max(max_abs: float) -> float:
     return T
 
 
+def _guard_large_image(
+    path: Path,
+    allow_large: bool,
+    custom_limit: Optional[int],
+) -> tuple[int, int, str]:
+    """
+    Inspect the image dimensions and manage Pillow's decompression-bomb guard.
+    Returns (width, height, mode) for downstream reader selection.
+    """
+    original_limit = Image.MAX_IMAGE_PIXELS
+
+    def _open_once() -> tuple[int, int, str]:
+        with Image.open(path) as probe:
+            return probe.size[0], probe.size[1], probe.mode
+
+    if not allow_large:
+        try:
+            return _open_once()
+        except Image.DecompressionBombError as exc:
+            limit = original_limit or PIL_DEFAULT_PIXEL_LIMIT
+            raise ValueError(
+                f"Image '{path.name}' exceeds Pillow's safety limit "
+                f"({limit:,} pixels). Re-run with --allow-large-image "
+                f"and optionally --max-image-pixels to acknowledge processing."
+            ) from exc
+
+    provisional_limit = custom_limit if custom_limit is not None else None
+    Image.MAX_IMAGE_PIXELS = provisional_limit
+    try:
+        width, height, mode = _open_once()
+    except Image.DecompressionBombError as exc:
+        Image.MAX_IMAGE_PIXELS = original_limit
+        raise ValueError(
+            f"Image '{path.name}' still exceeds the provided --max-image-pixels "
+            f"limit ({custom_limit:,} pixels). Increase the limit or down-sample."
+        ) from exc
+
+    pixel_count = width * height
+    requested_limit = custom_limit if custom_limit is not None else PIL_DEFAULT_PIXEL_LIMIT
+    if custom_limit is not None and pixel_count > custom_limit:
+        Image.MAX_IMAGE_PIXELS = original_limit
+        raise ValueError(
+            f"Image '{path.name}' has {pixel_count:,} pixels which exceeds "
+            f"the specified --max-image-pixels value ({custom_limit:,})."
+        )
+
+    Image.MAX_IMAGE_PIXELS = max(pixel_count * 2, requested_limit)
+    print(
+        f"  Allowing large image ({width}x{height}, mode={mode}); "
+        f"Image.MAX_IMAGE_PIXELS set to {Image.MAX_IMAGE_PIXELS:,}"
+    )
+    return width, height, mode
+
+
 def _prepare_cache_dir(cache_dir_arg: str, keep_cache: bool) -> Tuple[Path, bool]:
     if cache_dir_arg:
         path = Path(cache_dir_arg).expanduser().resolve()
@@ -140,58 +197,49 @@ def _prepare_cache_dir(cache_dir_arg: str, keep_cache: bool) -> Tuple[Path, bool
     return tmp_path, not keep_cache
 
 
-def _cache_tiles(args, cache_dir: Path) -> CacheSummary:
+def _cache_tiles(args, cache_dir: Path, reader) -> CacheSummary:
     entries: List[TileCacheEntry] = []
     global_max_abs = 0.0
 
-    with Image.open(args.input_image) as img:
-        if img.mode != "L":
-            img = img.convert("L")
+    image_width, image_height = reader.size()
+    tiles_x = math.ceil(image_width / args.tile_width)
+    tiles_y = math.ceil(image_height / args.tile_height)
 
-        image_width, image_height = img.size
-        tiles_x = math.ceil(image_width / args.tile_width)
-        tiles_y = math.ceil(image_height / args.tile_height)
+    print(f"  Image size: {image_height}x{image_width}")
+    print(f"  Planned tiles: {tiles_x * tiles_y} ({tiles_x} x {tiles_y})")
 
-        print(f"  Image size: {image_height}x{image_width}")
-        print(f"  Planned tiles: {tiles_x * tiles_y} ({tiles_x} x {tiles_y})")
+    tile_index = 0
+    for ty in range(tiles_y):
+        for tx in range(tiles_x):
+            origin_x = tx * args.tile_width
+            origin_y = ty * args.tile_height
+            tile_width = min(args.tile_width, image_width - origin_x)
+            tile_height = min(args.tile_height, image_height - origin_y)
 
-        tile_index = 0
-        for ty in range(tiles_y):
-            for tx in range(tiles_x):
-                origin_x = tx * args.tile_width
-                origin_y = ty * args.tile_height
-                region = img.crop(
-                    (
-                        origin_x,
-                        origin_y,
-                        min(origin_x + args.tile_width, image_width),
-                        min(origin_y + args.tile_height, image_height),
-                    )
+            tile_array = reader.read_block(origin_x, origin_y, tile_width, tile_height)
+            wavelet_coeffs = hlp.do_dwt(tile_array, scales=args.scales, wavelet=args.wavelet)
+            flat_coeffs, _ = hlp.flatten_coeffs(wavelet_coeffs)
+
+            if flat_coeffs.size > 0:
+                tile_max = float(np.max(np.abs(flat_coeffs)))
+                if tile_max > global_max_abs:
+                    global_max_abs = tile_max
+
+            coeff_path = cache_dir / f"tile_{tile_index:06d}.npy"
+            np.save(coeff_path, flat_coeffs, allow_pickle=False)
+
+            entries.append(
+                TileCacheEntry(
+                    index=tile_index,
+                    origin_x=origin_x,
+                    origin_y=origin_y,
+                    width=tile_width,
+                    height=tile_height,
+                    coeff_path=coeff_path,
+                    coeff_count=int(flat_coeffs.size),
                 )
-                tile_array = np.array(region, dtype=np.float64)
-                wavelet_coeffs = hlp.do_dwt(tile_array, scales=args.scales, wavelet=args.wavelet)
-                flat_coeffs, _ = hlp.flatten_coeffs(wavelet_coeffs)
-
-                if flat_coeffs.size > 0:
-                    tile_max = float(np.max(np.abs(flat_coeffs)))
-                    if tile_max > global_max_abs:
-                        global_max_abs = tile_max
-
-                coeff_path = cache_dir / f"tile_{tile_index:06d}.npy"
-                np.save(coeff_path, flat_coeffs, allow_pickle=False)
-
-                entries.append(
-                    TileCacheEntry(
-                        index=tile_index,
-                        origin_x=origin_x,
-                        origin_y=origin_y,
-                        width=region.width,
-                        height=region.height,
-                        coeff_path=coeff_path,
-                        coeff_count=int(flat_coeffs.size),
-                    )
-                )
-                tile_index += 1
+            )
+            tile_index += 1
 
     return CacheSummary(entries=entries, image_width=image_width, image_height=image_height, global_max_abs=global_max_abs)
 
@@ -414,13 +462,35 @@ def _decompress_tiled_file(input_path: Path) -> Tuple[np.ndarray, Dict[str, floa
     return reconstructed, header
 
 
-def run_tiled_compression(args, output_path: Path):
+def _reconstruct_full_image(reader, tile_width: int, tile_height: int) -> np.ndarray:
+    """
+    Stitch the entire source image using the provided tile reader (used for metrics when
+    Pillow cannot reopen the original).
+    """
+    width, height = reader.size()
+    canvas = np.zeros((height, width), dtype=np.float64)
+
+    tiles_x = math.ceil(width / tile_width)
+    tiles_y = math.ceil(height / tile_height)
+
+    for ty in range(tiles_y):
+        for tx in range(tiles_x):
+            origin_x = tx * tile_width
+            origin_y = ty * tile_height
+            block_w = min(tile_width, width - origin_x)
+            block_h = min(tile_height, height - origin_y)
+            block = reader.read_block(origin_x, origin_y, block_w, block_h)
+            canvas[origin_y : origin_y + block_h, origin_x : origin_x + block_w] = block
+    return canvas
+
+
+def run_tiled_compression(args, output_path: Path, reader):
     cache_dir, cleanup_cache = _prepare_cache_dir(args.tile_cache_dir, args.keep_tile_cache)
     print(f"Using tile cache directory: {cache_dir}")
 
     try:
         print("Pass 1: Scanning image tiles and caching flattened coefficients...")
-        cache_summary = _cache_tiles(args, cache_dir)
+        cache_summary = _cache_tiles(args, cache_dir, reader)
         if not cache_summary.entries:
             raise ValueError("No tiles were generated from the input image")
 
@@ -471,6 +541,7 @@ def run_tiled_compression(args, output_path: Path):
     finally:
         if cleanup_cache:
             shutil.rmtree(cache_dir, ignore_errors=True)
+        reader.close()
 
 
 def main():
@@ -548,8 +619,35 @@ Examples:
         action="store_true",
         help="Keep the temporary tile cache directory instead of deleting it after compression.",
     )
+    parser.add_argument(
+        "--allow-large-image",
+        action="store_true",
+        help="Opt-in to processing images larger than Pillow's default decompression guard after dimension validation.",
+    )
+    parser.add_argument(
+        "--max-image-pixels",
+        type=int,
+        default=None,
+        help="Custom pixel limit to compare against before lifting the Pillow guard (use with --allow-large-image).",
+    )
+    parser.add_argument(
+        "--tiff-reader",
+        choices=["auto", "pillow", "tifffile"],
+        default="auto",
+        help="Backend to read tiles. 'auto' switches to tifffile for gigapixel TIFFs.",
+    )
+    parser.add_argument(
+        "--skip-metrics",
+        action="store_true",
+        help="Skip PSNR/MSE evaluation (useful when the source image cannot be reopened safely).",
+    )
 
     args = parser.parse_args()
+
+    input_path = Path(args.input_image).expanduser().resolve()
+    args.input_image = str(input_path)
+    width, height, _ = _guard_large_image(input_path, args.allow_large_image, args.max_image_pixels)
+    pixel_count = width * height
 
     if args.tile_width <= 0 or args.tile_height <= 0:
         raise ValueError("Tile dimensions must be positive integers")
@@ -573,7 +671,14 @@ Examples:
     print()
 
     try:
-        stats = run_tiled_compression(args, output_path)
+        reader = create_tile_reader(
+            input_path,
+            args.tiff_reader,
+            grayscale=True,
+            pixel_count=pixel_count,
+        )
+
+        stats = run_tiled_compression(args, output_path, reader)
 
         compressed_size = os.path.getsize(args.output_wdr)
         raw_pixel_data_size = stats["image_width"] * stats["image_height"] * 8
@@ -609,19 +714,42 @@ Examples:
             hlp.save_image(args.reconstructed, reconstructed_img)
             print(f"  Reconstructed image saved: {args.reconstructed}")
 
-            print("Evaluating reconstruction quality...")
-            original_img = hlp.load_image(args.input_image)
-            reconstructed_clipped = np.clip(reconstructed_img, 0, 255)
-            mse = float(np.mean((original_img - reconstructed_clipped) ** 2))
-            rmse = float(np.sqrt(mse))
-            psnr = calculate_psnr(original_img, reconstructed_clipped)
+            if args.skip_metrics:
+                print("Metrics skipped (--skip-metrics set).")
+            else:
+                print("Evaluating reconstruction quality (batched)...")
+                # Use batched metrics to avoid loading entire images into memory
+                original_reader = create_tile_reader(
+                    input_path,
+                    args.tiff_reader,
+                    grayscale=True,
+                    pixel_count=pixel_count,
+                )
+                # Create reader for reconstructed image (saved to disk)
+                reconstructed_path = Path(args.reconstructed)
+                reconstructed_reader = create_tile_reader(
+                    reconstructed_path,
+                    "pillow",  # Reconstructed images are saved as PNG/JPEG, use Pillow
+                    grayscale=True,
+                    pixel_count=pixel_count,
+                )
+                try:
+                    mse, rmse, psnr = compute_batched_metrics(
+                        original_reader,
+                        reconstructed_reader,
+                        args.tile_width,
+                        args.tile_height,
+                    )
+                finally:
+                    original_reader.close()
+                    reconstructed_reader.close()
 
-            print(f"  MSE: {mse:.6f}")
-            print(f"  RMSE: {rmse:.6f}")
-            print(f"  PSNR: {psnr:.2f} dB")
-            if header["quantization_enabled"] and header["quantization_step"] > 0:
-                print(f"  Quantization step: {header['quantization_step']:.6e}")
-            print()
+                print(f"  MSE: {mse:.6f}")
+                print(f"  RMSE: {rmse:.6f}")
+                print(f"  PSNR: {psnr:.2f} dB")
+                if header["quantization_enabled"] and header["quantization_step"] > 0:
+                    print(f"  Quantization step: {header['quantization_step']:.6e}")
+                print()
 
         print("=" * 60)
         print("Pipeline completed successfully!")

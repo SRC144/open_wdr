@@ -2,6 +2,7 @@ import io
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from main import (
     TILE_CHUNK_STRUCT,
@@ -11,6 +12,7 @@ from main import (
     _pack_tiled_header,
     _read_tiled_header,
 )
+from wdr.utils.tile_reader import decide_reader_backend, DEFAULT_AUTO_THRESHOLD
 
 
 def test_calculate_initial_threshold_from_max_matches_cpp_logic():
@@ -80,4 +82,22 @@ def test_tile_chunk_header_layout_matches_struct():
     assert unpacked[4] == entry.width
     assert unpacked[5] == entry.height
     assert unpacked[6] == payload_size
+
+
+def test_decide_reader_backend_auto_threshold():
+    assert (
+        decide_reader_backend("auto", DEFAULT_AUTO_THRESHOLD + 1)
+        == "tifffile"
+    )
+    assert (
+        decide_reader_backend("auto", DEFAULT_AUTO_THRESHOLD - 1)
+        == "pillow"
+    )
+
+
+def test_decide_reader_backend_explicit():
+    assert decide_reader_backend("pillow", 10) == "pillow"
+    assert decide_reader_backend("tifffile", 10) == "tifffile"
+    with pytest.raises(ValueError):
+        decide_reader_backend("unknown", 10)
 

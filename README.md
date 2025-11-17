@@ -92,6 +92,7 @@ python main.py input.png output.wdrt \
 ```
 
 If you omit directory components in `output.wdrt` or `--reconstructed`, the script writes them into `compressed/` automatically; provide full paths when you want a different destination. Power users can also set `--tile-cache-dir` to reuse a specific disk location or `--keep-tile-cache` to inspect the flattened tile cache between passes.
+For gigapixel TIFFs, run with `--allow-large-image` and optionally `--tiff-reader tifffile` (requires the `tifffile` + `zarr` dependencies) to stream tiles without hitting Pillow's guard. Add `--skip-metrics` if you only need the reconstructed image and want to skip PSNR/MSE on huge sources; otherwise the CLI will rebuild the original via the same reader to compute metrics.
 
 ### Benchmarking
 
