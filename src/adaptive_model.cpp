@@ -5,6 +5,7 @@
 
 AdaptiveModel::AdaptiveModel(int num_symbols)
     : num_symbols_(num_symbols) {
+    // In our case we pass only the 6 symbol or 2 symbol alphabets.
     if (num_symbols < 2 || num_symbols > 256) {
         throw std::invalid_argument("num_symbols must be between 2 and 256");
     }
@@ -18,22 +19,20 @@ AdaptiveModel::AdaptiveModel(int num_symbols)
 }
 
 void AdaptiveModel::start_model() {
-    // Initialize all symbol frequencies to 1
-    for (int i = 0; i <= num_symbols_; i++) {
-        freq_[i] = 1;
-    }
-    freq_[0] = 0;  // Freq[0] must not be the same as freq[1]
-    
-    // Initialize cumulative frequencies (backward)
-    for (int i = 0; i <= num_symbols_; i++) {
-        cum_freq_[i] = num_symbols_ - i;
-    }
-    
     // Initialize symbol mapping (initially identity mapping)
-    for (int i = 0; i < num_symbols_; i++) {
+    /*  We use num_symbols instead of the No_of_chars like the paper since our
+        alphabet is limited to maximum 6 symbols, no need for 256.
+    */
+    for (int i = 0; i < num_symbols_; i++) { 
         symbol_to_index_[i] = i + 1;  // Symbols are 1-indexed internally
         index_to_symbol_[i + 1] = i;
     }
+
+    for (int i = 0; i <= num_symbols_; i++) {
+        freq_[i] = 1;                    // Initialize all symbol frequencies to 1
+        cum_freq_[i] = num_symbols_ - i; // Initialize cumulative frequencies (backward)
+    }
+    freq_[0] = 0;  // Freq[0] must not be the same as freq[1]
 }
 
 void AdaptiveModel::update_model(int symbol) {
@@ -98,13 +97,16 @@ void AdaptiveModel::reset() {
 
 void AdaptiveModel::rescale_frequencies() {
     // Halve all frequencies (keeping them non-zero)
+    /*  As we encode data we count the symbols. The count can get too big and
+        cause integer overflow. The paper sets a hard limit MAX_FREQUENCY and if the cumulative
+        frequencies exceed that we halve all frequencies, preserving the proportions.*/
     int cum = 0;
     for (int i = num_symbols_; i >= 0; i--) {
         freq_[i] = (freq_[i] + 1) / 2;  // Round up to avoid zero
         cum_freq_[i] = cum;
         cum += freq_[i];
     }
-    // Ensure freq[0] is 0
+    // Ensure freq[0] is 0 (it must not be the same as freq[1])
     freq_[0] = 0;
 }
 

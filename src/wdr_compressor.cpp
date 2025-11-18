@@ -19,35 +19,17 @@ double WDRCompressor::calculate_initial_T(const std::vector<double> &coeffs) {
     throw std::invalid_argument("Empty coefficient array");
   }
 
-  // Find maximum absolute value
   double max_abs = 0.0;
-  for (double coeff : coeffs) {
-    double abs_coeff = std::abs(coeff);
-    if (abs_coeff > max_abs) {
-      max_abs = abs_coeff;
-    }
+  for (double c : coeffs) {
+    max_abs = std::max(max_abs, std::abs(c));
   }
 
   if (max_abs == 0.0) {
     return 1.0; // Default threshold for all-zero coefficients
   }
 
-  // Find the largest power of 2 such that max_abs < 2*T and max_abs >= T
-  // T = 2^k where k is the largest integer such that 2^k <= max_abs < 2^(k+1)
-  double T = std::pow(2.0, std::floor(std::log2(max_abs)));
-
-  // Ensure max_abs >= T (if max_abs is exactly a power of 2, T might be too
-  // large)
-  if (max_abs < T) {
-    T = T / 2.0;
-  }
-
-  // Ensure max_abs < 2*T
-  if (max_abs >= 2.0 * T) {
-    T = T * 2.0;
-  }
-
-  return T;
+  // Initial threshold, T is the largest power of 2 where T <= max|x_j| < 2T
+  return std::pow(2.0, std::floor(std::log2(max_abs)));
 }
 
 void WDRCompressor::compress(const std::vector<double> &coeffs,
