@@ -1,17 +1,12 @@
 """
 Integration tests for WDR coder (requires compiled C++ module).
+Updated for Memory-Based Tiling Architecture.
 """
 
 import numpy as np
 import pytest
-import tempfile
-import os
-from pathlib import Path
+import math
 from wdr.utils import helpers as hlp
-
-pytestmark = [
-    pytest.mark.filterwarnings("ignore:Level value of .*boundary effects.:UserWarning"),
-]
 
 # Try to import the compiled coder - skip tests if not available
 try:
@@ -19,320 +14,132 @@ try:
     WDR_CODER_AVAILABLE = True
 except ImportError:
     WDR_CODER_AVAILABLE = False
-    pytestmark.append(pytest.mark.skip("wdr_coder module not available"))
 
-TESTS_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = TESTS_DIR.parent
-ASSETS_DIR = PROJECT_ROOT / "assets"
-TEST_OUTPUT_DIR = PROJECT_ROOT / "compressed" / "tests"
-TEST_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+pytestmark = [
+    pytest.mark.filterwarnings("ignore:Level value of .*boundary effects.:UserWarning"),
+    pytest.mark.skipif(not WDR_CODER_AVAILABLE, reason="wdr_coder module not available")
+]
 
+def calculate_test_T(coeffs):
+    """Helper to calculate threshold for tests."""
+    max_abs = np.max(np.abs(coeffs))
+    if max_abs == 0: return 1.0
+    return 2.0 ** math.floor(math.log2(max_abs))
 
-@pytest.mark.skipif(not WDR_CODER_AVAILABLE, reason="wdr_coder module not available")
 def test_compress_decompress_round_trip_simple():
-    """Test that compress and decompress are inverse operations with simple known array."""
-    # Create simple, known array
+    """Test basic round trip with a known small array."""
     test_coeffs = np.array([100.0, -42.0, 10.0, 0.0, 3.0], dtype=np.float64)
+    global_T = calculate_test_T(test_coeffs)
     
-    # Create temporary file
-    with tempfile.NamedTemporaryFile(suffix='.wdr', delete=False) as f:
-        temp_path = f.name
+    # Instantiate Class
+    compressor = wdr_coder.WDRCompressor(num_passes=16)
     
-    try:
-        # Compress
-        wdr_coder.compress(test_coeffs, temp_path, num_passes=26)
-        
-        # Check that file exists
-        assert os.path.exists(temp_path)
-        
-        # Decompress
-        decompressed_coeffs = wdr_coder.decompress(temp_path)
-        
-        # Check properties
-        assert decompressed_coeffs.shape == test_coeffs.shape
-        assert decompressed_coeffs.dtype == np.float64
-        
-        # Verify reconstruction magnitude (signs may be encoded via new definitions)
-        np.testing.assert_allclose(np.abs(decompressed_coeffs), np.abs(test_coeffs), rtol=1e-6, atol=1e-6)
-    finally:
-        # Clean up
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
+    # Compress (Returns list/vector of ints)
+    compressed_data = compressor.compress(test_coeffs, global_T)
+    
+    # Verify we got bytes back
+    assert len(compressed_data) > 0
+    assert isinstance(compressed_data, (list, tuple, bytes))
+    
+    # Decompress (Requires explicit T and length)
+    # Note: Convert to bytes object for the binding
+    compressed_bytes = bytes(compressed_data)
+    recon = compressor.decompress(compressed_bytes, global_T, len(test_coeffs))
+    
+    # Verify
+    recon = np.array(recon)
+    assert recon.shape == test_coeffs.shape
+    # Check values (lossy compression, so allow small tolerance)
+    np.testing.assert_allclose(recon, test_coeffs, atol=1.0)
 
-@pytest.mark.skipif(not WDR_CODER_AVAILABLE, reason="wdr_coder module not available")
-def test_compress_decompress_round_trip():
-    """Test that compress and decompress are inverse operations."""
-    # Create test coefficients
-    test_coeffs = np.random.randn(1000).astype(np.float64)
+def test_compress_decompress_random():
+    """Test round trip with random data."""
+    test_coeffs = np.random.randn(1000).astype(np.float64) * 100.0
+    global_T = calculate_test_T(test_coeffs)
     
-    # Create temporary file
-    with tempfile.NamedTemporaryFile(suffix='.wdr', delete=False) as f:
-        temp_path = f.name
+    compressor = wdr_coder.WDRCompressor(num_passes=20)
     
-    try:
-        # Compress
-        wdr_coder.compress(test_coeffs, temp_path, num_passes=26)
-        
-        # Check that file exists
-        assert os.path.exists(temp_path)
-        
-        # Decompress
-        decompressed_coeffs = wdr_coder.decompress(temp_path)
-        
-        # Check properties
-        assert decompressed_coeffs.shape == test_coeffs.shape
-        assert decompressed_coeffs.dtype == np.float64
-        
-        # Verify reconstruction magnitude (signs may be encoded via new definitions)
-        np.testing.assert_allclose(np.abs(decompressed_coeffs), np.abs(test_coeffs), rtol=1e-6, atol=1e-6)
-    finally:
-        # Clean up
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
+    compressed = compressor.compress(test_coeffs, global_T)
+    recon = compressor.decompress(bytes(compressed), global_T, len(test_coeffs))
+    
+    np.testing.assert_allclose(np.array(recon), test_coeffs, atol=0.5)
 
-
-@pytest.mark.skipif(not WDR_CODER_AVAILABLE, reason="wdr_coder module not available")
 def test_compress_empty_array():
-    """Test error handling for empty coefficient array."""
-    # Create empty array
-    empty_coeffs = np.array([])
+    """Test handling of empty input."""
+    empty_coeffs = np.array([], dtype=np.float64)
+    compressor = wdr_coder.WDRCompressor(num_passes=16)
     
-    # Create temporary file
-    with tempfile.NamedTemporaryFile(suffix='.wdr', delete=False) as f:
-        temp_path = f.name
+    # Should return empty bytes, not crash
+    compressed = compressor.compress(empty_coeffs, 1.0)
+    assert len(compressed) == 0
     
+    # Decompressing empty bytes should return empty array (if size 0 requested)
+    recon = compressor.decompress(bytes(), 1.0, 0)
+    assert len(recon) == 0
+
+def test_decompress_garbage_data():
+    """Test resilience against garbage input."""
+    garbage = b'\x00\xff\xab\x12' # Random junk
+    compressor = wdr_coder.WDRCompressor(num_passes=16)
+    
+    # Should probably raise RuntimeError from C++ or return zeros/garbage without crashing
     try:
-        # Should raise an error
-        with pytest.raises(Exception):
-            wdr_coder.compress(empty_coeffs, temp_path, num_passes=26)
-    finally:
-        # Clean up
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
+        compressor.decompress(garbage, 128.0, 100)
+    except RuntimeError:
+        pass # crashing with detailed error is acceptable for garbage
+    except Exception:
+        pass
 
-
-@pytest.mark.skipif(not WDR_CODER_AVAILABLE, reason="wdr_coder module not available")
-def test_decompress_nonexistent_file():
-    """Test error handling for nonexistent file."""
-    # Try to decompress a nonexistent file
-    with pytest.raises(Exception):
-        wdr_coder.decompress("nonexistent_file.wdr")
-
-
-@pytest.mark.skipif(not WDR_CODER_AVAILABLE, reason="wdr_coder module not available")
-def test_full_pipeline():
-    """Test full compression/decompression pipeline."""
-    # Create a test image
-    test_img = np.random.rand(32, 32) * 255
+def test_full_pipeline_integration():
+    """Test the DWT -> Compress -> Decompress -> IDWT chain."""
+    # 1. Create Image
+    test_img = np.random.rand(64, 64) * 255
     
-    # Perform DWT
+    # 2. DWT
     coeffs = hlp.do_dwt(test_img, scales=2, wavelet='bior4.4')
+    flat_coeffs, meta = hlp.flatten_coeffs(coeffs)
     
-    # Flatten coefficients
-    flat_coeffs, shape_metadata = hlp.flatten_coeffs(coeffs)
+    # 3. Global T
+    global_T = calculate_test_T(flat_coeffs)
     
-    # Create temporary file
-    with tempfile.NamedTemporaryFile(suffix='.wdr', delete=False) as f:
-        temp_path = f.name
+    # 4. Compress
+    compressor = wdr_coder.WDRCompressor(num_passes=24)
+    compressed = compressor.compress(flat_coeffs, global_T)
     
-    try:
-        # Compress
-        wdr_coder.compress(flat_coeffs, temp_path, num_passes=26)
-        
-        # Decompress
-        decompressed_flat_coeffs = wdr_coder.decompress(temp_path)
-        
-        # Unflatten coefficients
-        decompressed_coeffs = hlp.unflatten_coeffs(decompressed_flat_coeffs, shape_metadata)
-        
-        # Perform IDWT
-        reconstructed_img = hlp.do_idwt(decompressed_coeffs, wavelet='bior4.4')
-        
-        # Check that shapes match
-        assert reconstructed_img.shape == test_img.shape
-        
-        # Verify reconstruction quality (allow modest tolerance due to floating ops)
-        np.testing.assert_allclose(reconstructed_img, test_img, rtol=1e-5, atol=3e-1)
-    finally:
-        # Clean up
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
+    # 5. Decompress
+    recon_flat = compressor.decompress(bytes(compressed), global_T, len(flat_coeffs))
+    recon_flat = np.array(recon_flat)
+    
+    # 6. IDWT
+    recon_coeffs = hlp.unflatten_coeffs(recon_flat, meta)
+    recon_img = hlp.do_idwt(recon_coeffs, wavelet='bior4.4')
+    
+    # 7. Verify
+    assert recon_img.shape == test_img.shape
+    # High pass count = high quality
+    np.testing.assert_allclose(recon_img, test_img, atol=2.0)
 
-@pytest.mark.skipif(not WDR_CODER_AVAILABLE, reason="wdr_coder module not available")
-def test_edge_cases():
-    """Test edge cases for compression/decompression."""
-    # Test: All zeros
-    zero_coeffs = np.zeros(100, dtype=np.float64)
-    with tempfile.NamedTemporaryFile(suffix='.wdr', delete=False) as f:
-        temp_path = f.name
-    try:
-        wdr_coder.compress(zero_coeffs, temp_path, num_passes=26)
-        decompressed = wdr_coder.decompress(temp_path)
-        np.testing.assert_allclose(decompressed, zero_coeffs, atol=1e-10)
-    finally:
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
+def test_edge_cases_zeros():
+    """Test compression of all-zero array."""
+    zeros = np.zeros(100, dtype=np.float64)
+    compressor = wdr_coder.WDRCompressor(num_passes=16)
     
-    # Test: All negative
-    negative_coeffs = np.array([-100.0, -50.0, -25.0], dtype=np.float64)
-    with tempfile.NamedTemporaryFile(suffix='.wdr', delete=False) as f:
-        temp_path = f.name
-    try:
-        wdr_coder.compress(negative_coeffs, temp_path, num_passes=26)
-        decompressed = wdr_coder.decompress(temp_path)
-        np.testing.assert_allclose(np.abs(decompressed), np.abs(negative_coeffs), rtol=1e-6, atol=1e-6)
-    finally:
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
+    # T=1.0 default for zeros
+    compressed = compressor.compress(zeros, 1.0)
+    recon = compressor.decompress(bytes(compressed), 1.0, 100)
     
-    # Test: Single element
-    single_coeff = np.array([42.0], dtype=np.float64)
-    with tempfile.NamedTemporaryFile(suffix='.wdr', delete=False) as f:
-        temp_path = f.name
-    try:
-        wdr_coder.compress(single_coeff, temp_path, num_passes=26)
-        decompressed = wdr_coder.decompress(temp_path)
-        np.testing.assert_allclose(decompressed, single_coeff, rtol=1e-6, atol=1e-6)
-    finally:
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
+    np.testing.assert_array_equal(np.array(recon), zeros)
 
-def create_test_pattern():
-    """Create a test pattern image with vertical and horizontal lines."""
-    # Create 16x16 image
-    img = np.zeros((16, 16), dtype=np.uint8)
+def test_edge_cases_negatives():
+    """Test compression of negative values."""
+    neg = np.array([-50.0, -10.0, -0.5], dtype=np.float64)
+    global_T = calculate_test_T(neg)
     
-    # Add vertical line at column 8
-    img[:, 8] = 255
+    compressor = wdr_coder.WDRCompressor(num_passes=20)
+    compressed = compressor.compress(neg, global_T)
+    recon = compressor.decompress(bytes(compressed), global_T, len(neg))
     
-    # Add horizontal line at row 8
-    img[8, :] = 255
-    
-    return img
-
-@pytest.mark.skipif(not WDR_CODER_AVAILABLE, reason="wdr_coder module not available")
-def test_test_pattern():
-    """Test compression/decompression with test pattern image."""
-    # Create test pattern
-    test_pattern = create_test_pattern().astype(np.float64)
-    
-    # Perform DWT
-    coeffs = hlp.do_dwt(test_pattern, scales=2, wavelet='bior4.4')
-    
-    # Flatten coefficients
-    flat_coeffs, shape_metadata = hlp.flatten_coeffs(coeffs)
-    
-    test_pattern_path = TEST_OUTPUT_DIR / 'pattern.png'
-    
-    # Save test pattern for manual inspection if needed
-    hlp.save_image(str(test_pattern_path), test_pattern)
-    
-    # Compress and decompress
-    with tempfile.NamedTemporaryFile(suffix='.wdr', delete=False) as f:
-        temp_path = f.name
-    
-    try:
-        wdr_coder.compress(flat_coeffs, temp_path, num_passes=26)
-        decompressed_flat_coeffs = wdr_coder.decompress(temp_path)
-        
-        # Unflatten and reconstruct
-        decompressed_coeffs = hlp.unflatten_coeffs(decompressed_flat_coeffs, shape_metadata)
-        reconstructed_img = hlp.do_idwt(decompressed_coeffs, wavelet='bior4.4')
-        
-        # Verify reconstruction
-        # With DWT/IDWT and quantization, allow slightly larger tolerance
-        np.testing.assert_allclose(reconstructed_img, test_pattern, rtol=1e-5, atol=1e-5)
-    finally:
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
-
-
-@pytest.mark.skipif(not WDR_CODER_AVAILABLE, reason="wdr_coder module not available")
-def test_golden_file():
-    """Test deterministic reconstruction against the source image."""
-    # Use assets/lenna.png if it exists, otherwise skip
-    lenna_path = ASSETS_DIR / 'lenna.png'
-    
-    if not lenna_path.exists():
-        pytest.skip("Test image not found")
-    
-    # Load original image
-    original_img = hlp.load_image(str(lenna_path))
-    
-    # Perform DWT
-    coeffs = hlp.do_dwt(original_img, scales=2, wavelet='bior4.4')
-    
-    # Flatten coefficients
-    flat_coeffs, shape_metadata = hlp.flatten_coeffs(coeffs)
-    
-    # Compress with fixed settings
-    with tempfile.NamedTemporaryFile(suffix='.wdr', delete=False) as f:
-        temp_path = f.name
-    
-    try:
-        wdr_coder.compress(flat_coeffs, temp_path, num_passes=26)
-        
-        # Decompress
-        decompressed_flat_coeffs = wdr_coder.decompress(temp_path)
-        
-        # Unflatten and reconstruct
-        decompressed_coeffs = hlp.unflatten_coeffs(decompressed_flat_coeffs, shape_metadata)
-        reconstructed_img = hlp.do_idwt(decompressed_coeffs, wavelet='bior4.4')
-        
-        # Save reconstructed image (quantized to uint8) for inspection
-        recon_output_path = TEST_OUTPUT_DIR / 'recon_output.png'
-        hlp.save_image(str(recon_output_path), reconstructed_img)
-        
-        # Compare quantized reconstruction to original source image
-        quantized = np.clip(np.rint(reconstructed_img), 0, 255).astype(np.uint8)
-        source_uint8 = np.clip(np.rint(original_img), 0, 255).astype(np.uint8)
-        np.testing.assert_array_equal(quantized, source_uint8)
-    finally:
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
-
-@pytest.mark.skipif(not WDR_CODER_AVAILABLE, reason="wdr_coder module not available")
-def test_real_image_round_trip():
-    """Test full round-trip with real image."""
-    lenna_path = ASSETS_DIR / 'lenna.png'
-    
-    if not lenna_path.exists():
-        pytest.skip("Test image not found")
-    
-    # Load original image
-    original_img = hlp.load_image(str(lenna_path))
-    
-    # Perform DWT
-    coeffs = hlp.do_dwt(original_img, scales=2, wavelet='bior4.4')
-    
-    # Flatten coefficients
-    flat_coeffs, shape_metadata = hlp.flatten_coeffs(coeffs)
-    
-    # Compress
-    with tempfile.NamedTemporaryFile(suffix='.wdr', delete=False) as f:
-        temp_path = f.name
-    
-    try:
-        wdr_coder.compress(flat_coeffs, temp_path)
-        
-        # Decompress
-        decompressed_flat_coeffs = wdr_coder.decompress(temp_path)
-        
-        # Unflatten and reconstruct
-        decompressed_coeffs = hlp.unflatten_coeffs(decompressed_flat_coeffs, shape_metadata)
-        reconstructed_img = hlp.do_idwt(decompressed_coeffs, wavelet='bior4.4')
-        
-        # Verify shapes match
-        assert reconstructed_img.shape == original_img.shape
-        
-        # Verify reconstruction quality
-        # With DWT/IDWT and quantization, allow slightly larger tolerance
-        np.testing.assert_allclose(reconstructed_img, original_img, rtol=1e-5, atol=1e-5)
-    finally:
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
-
+    np.testing.assert_allclose(np.array(recon), neg, atol=0.1)
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-

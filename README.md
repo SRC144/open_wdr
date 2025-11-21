@@ -40,6 +40,7 @@ Wavelet Difference Reduction (WDR) combines discrete wavelet transforms, progres
 ### Python tests
 
 ```bash
+pip install pytest
 python -m pytest tests/
 ```
 

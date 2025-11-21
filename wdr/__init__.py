@@ -10,4 +10,10 @@ coder = import_module(".coder", __name__)
 # Re-export utils for convenience
 from . import utils
 
-__all__ = ["coder", "utils"]
+# Re-export the container module (File Format Logic)
+from . import container
+
+# Re-export the io module (File Format Logic)
+from . import io
+
+__all__ = ["coder", "utils", "container", "io"]

@@ -69,6 +69,7 @@ setup(
         "numpy>=1.20.0",
         "pywavelets>=1.3.0",
         "Pillow>=8.0.0",
+        "tifffile>=2024.8.30",
     ],
 )
 

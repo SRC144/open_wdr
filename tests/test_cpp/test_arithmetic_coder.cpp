@@ -1,13 +1,13 @@
 #include <gtest/gtest.h>
-#include <sstream>
+#include <vector>
 #include "arithmetic_coder.hpp"
 #include "adaptive_model.hpp"
 #include "bit_stream.hpp"
 
 // Test: ArithmeticCoder_InitialState
 TEST(ArithmeticCoderTest, InitialState) {
-    std::stringstream ss;
-    BitOutputStream bit_stream(ss);
+    std::vector<uint8_t> buffer;
+    BitOutputStream bit_stream(buffer);
     AdaptiveModel model(2);
     ArithmeticCoder coder;
     
@@ -28,8 +28,8 @@ TEST(ArithmeticCoderTest, Constants) {
 
 // Test: ArithmeticCoder_SimpleSequence_ManualCalculation
 TEST(ArithmeticCoderTest, SimpleSequence_ManualCalculation) {
-    std::stringstream ss;
-    BitOutputStream bit_stream(ss);
+    std::vector<uint8_t> buffer;
+    BitOutputStream bit_stream(buffer);
     AdaptiveModel model(2);
     ArithmeticCoder coder;
     
@@ -37,37 +37,32 @@ TEST(ArithmeticCoderTest, SimpleSequence_ManualCalculation) {
     
     // Encode sequence [0, 1, 0, 1]
     // With binary model, initial frequencies are [1, 1], so cum_freq = [2, 1, 0]
-    // Symbol 0: range = [1, 2) out of [0, 2)
-    // Symbol 1: range = [0, 1) out of [0, 2)
     
-    // After encoding symbol 0:
-    // low = 0 + (65536 * 1) / 2 = 32768
-    // high = 0 + (65536 * 2) / 2 - 1 = 65535
     coder.encode_symbol(0, model);
     model.update_model(0);
     
-    // After encoding symbol 1:
-    // Current range: [32768, 65535], size = 32768
-    // Symbol 1: range = [32768, 49151] (lower half of current range)
     coder.encode_symbol(1, model);
     model.update_model(1);
     
-    // Continue encoding
     coder.encode_symbol(0, model);
     model.update_model(0);
+    
     coder.encode_symbol(1, model);
     model.update_model(1);
     
     coder.done_encoding();
+    bit_stream.flush();
     
-    // Verify encoding completed
+    // Verify encoding completed and produced data
     EXPECT_FALSE(coder.is_encoding());
+    EXPECT_GT(buffer.size(), 0);
 }
 
 // Test: ArithmeticCoder_RoundTrip_Simple
 TEST(ArithmeticCoderTest, RoundTrip_Simple) {
-    std::stringstream ss;
-    BitOutputStream out_stream(ss);
+    std::vector<uint8_t> buffer;
+    BitOutputStream out_stream(buffer);
+    
     AdaptiveModel encode_model(2);
     AdaptiveModel decode_model(2);
     ArithmeticCoder encoder;
@@ -85,8 +80,8 @@ TEST(ArithmeticCoderTest, RoundTrip_Simple) {
     out_stream.flush();
     
     // Decode sequence
-    ss.seekg(0);
-    BitInputStream in_stream(ss);
+    // We create a fresh input stream from the populated buffer
+    BitInputStream in_stream(buffer);
     decoder.start_decoding(in_stream, decode_model);
     
     std::vector<int> decoded;
@@ -102,14 +97,15 @@ TEST(ArithmeticCoderTest, RoundTrip_Simple) {
 
 // Test: ArithmeticCoder_RoundTrip_AdaptiveModel
 TEST(ArithmeticCoderTest, RoundTrip_AdaptiveModel) {
-    std::stringstream ss;
-    BitOutputStream out_stream(ss);
+    std::vector<uint8_t> buffer;
+    BitOutputStream out_stream(buffer);
+    
     AdaptiveModel encode_model(2);
     AdaptiveModel decode_model(2);
     ArithmeticCoder encoder;
     ArithmeticCoder decoder;
     
-    // Encode sequence with adaptive model
+    // Encode sequence with adaptive model (frequencies change)
     std::vector<int> original = {0, 0, 0, 1, 1, 0, 0, 1, 1, 1};
     encoder.start_encoding(out_stream, encode_model);
     
@@ -121,8 +117,7 @@ TEST(ArithmeticCoderTest, RoundTrip_AdaptiveModel) {
     out_stream.flush();
     
     // Decode sequence
-    ss.seekg(0);
-    BitInputStream in_stream(ss);
+    BitInputStream in_stream(buffer);
     decoder.start_decoding(in_stream, decode_model);
     
     std::vector<int> decoded;
@@ -143,8 +138,9 @@ TEST(ArithmeticCoderTest, RoundTrip_AdaptiveModel) {
 
 // Test: ArithmeticCoder_RoundTrip_ComplexSequence
 TEST(ArithmeticCoderTest, RoundTrip_ComplexSequence) {
-    std::stringstream ss;
-    BitOutputStream out_stream(ss);
+    std::vector<uint8_t> buffer;
+    BitOutputStream out_stream(buffer);
+    
     AdaptiveModel encode_model(2);
     AdaptiveModel decode_model(2);
     ArithmeticCoder encoder;
@@ -165,8 +161,7 @@ TEST(ArithmeticCoderTest, RoundTrip_ComplexSequence) {
     out_stream.flush();
     
     // Decode sequence
-    ss.seekg(0);
-    BitInputStream in_stream(ss);
+    BitInputStream in_stream(buffer);
     decoder.start_decoding(in_stream, decode_model);
     
     std::vector<int> decoded;
@@ -182,8 +177,8 @@ TEST(ArithmeticCoderTest, RoundTrip_ComplexSequence) {
 
 // Test: ArithmeticCoder_DoneEncoding
 TEST(ArithmeticCoderTest, DoneEncoding) {
-    std::stringstream ss;
-    BitOutputStream out_stream(ss);
+    std::vector<uint8_t> buffer;
+    BitOutputStream out_stream(buffer);
     AdaptiveModel model(2);
     ArithmeticCoder coder;
     
@@ -195,14 +190,14 @@ TEST(ArithmeticCoderTest, DoneEncoding) {
     
     // Verify bits were written (done_encoding flushes final bits)
     out_stream.flush();
-    EXPECT_GT(ss.str().size(), 0);
+    EXPECT_GT(buffer.size(), 0);
 }
 
 // Test: ArithmeticCoder_StartDecoding
 TEST(ArithmeticCoderTest, StartDecoding) {
     // First encode something
-    std::stringstream ss;
-    BitOutputStream out_stream(ss);
+    std::vector<uint8_t> buffer;
+    BitOutputStream out_stream(buffer);
     AdaptiveModel encode_model(2);
     ArithmeticCoder encoder;
     
@@ -213,8 +208,7 @@ TEST(ArithmeticCoderTest, StartDecoding) {
     out_stream.flush();
     
     // Now decode
-    ss.seekg(0);
-    BitInputStream in_stream(ss);
+    BitInputStream in_stream(buffer);
     AdaptiveModel decode_model(2);
     ArithmeticCoder decoder;
     
@@ -226,8 +220,10 @@ TEST(ArithmeticCoderTest, StartDecoding) {
 
 // Test: ArithmeticCoder_ModelSeparation
 TEST(ArithmeticCoderTest, ModelSeparation) {
-    std::stringstream ss1, ss2;
-    BitOutputStream out_stream1(ss1), out_stream2(ss2);
+    std::vector<uint8_t> buffer1, buffer2;
+    BitOutputStream out_stream1(buffer1); 
+    BitOutputStream out_stream2(buffer2);
+    
     AdaptiveModel model1(2);
     AdaptiveModel model2(2);
     ArithmeticCoder coder1, coder2;
@@ -249,14 +245,11 @@ TEST(ArithmeticCoderTest, ModelSeparation) {
     EXPECT_NE(model1.get_frequency(1), model2.get_frequency(1));
 }
 
-// Test: ArithmeticCoder_UnderflowCondition (simplified - full test requires access to internal state)
+// Test: ArithmeticCoder_UnderflowCondition
 TEST(ArithmeticCoderTest, UnderflowCondition) {
-    // This test verifies that underflow handling works correctly
-    // Full verification would require access to internal state (low_, high_, bits_to_follow_)
-    // For now, we test that encoding/decoding works correctly even with sequences that might trigger underflow
+    std::vector<uint8_t> buffer;
+    BitOutputStream out_stream(buffer);
     
-    std::stringstream ss;
-    BitOutputStream out_stream(ss);
     AdaptiveModel encode_model(2);
     AdaptiveModel decode_model(2);
     ArithmeticCoder encoder;
@@ -277,8 +270,7 @@ TEST(ArithmeticCoderTest, UnderflowCondition) {
     out_stream.flush();
     
     // Decode and verify
-    ss.seekg(0);
-    BitInputStream in_stream(ss);
+    BitInputStream in_stream(buffer);
     decoder.start_decoding(in_stream, decode_model);
     
     std::vector<int> decoded;
@@ -295,4 +287,3 @@ int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }
-
