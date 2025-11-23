@@ -49,18 +49,18 @@ target_link_libraries(test_arithmetic_coder
 
 add_test(NAME ArithmeticCoderTests COMMAND test_arithmetic_coder)
 
-# Test: WDR Compressor (component tests)
-add_executable(test_wdr_compressor
-    test_wdr_compressor.cpp
+# Test: Differential Coding
+add_executable(test_differential_coding
+    test_differential_coding.cpp
 )
 
-target_link_libraries(test_wdr_compressor
+target_link_libraries(test_differential_coding
     wdr_core
     GTest::gtest
     GTest::gtest_main
 )
 
-add_test(NAME WDRCompressorTests COMMAND test_wdr_compressor)
+add_test(NAME DifferentialCodingTests COMMAND test_differential_coding)
 
 # Test: WDR Compressor Passes
 add_executable(test_wdr_compressor_passes
@@ -89,17 +89,3 @@ target_link_libraries(test_wdr_compressor_roundtrip
 )
 
 add_test(NAME WDRCompressorRoundTripTests COMMAND test_wdr_compressor_roundtrip)
-
-# Test: WDR File Format
-add_executable(test_wdr_file_format
-    test_wdr_file_format.cpp
-)
-
-target_link_libraries(test_wdr_file_format
-    wdr_core
-    GTest::gtest
-    GTest::gtest_main
-)
-
-add_test(NAME WDRFileFormatTests COMMAND test_wdr_file_format)
-

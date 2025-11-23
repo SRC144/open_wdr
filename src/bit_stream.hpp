@@ -3,140 +3,115 @@
 
 /**
  * @file bit_stream.hpp
- * @brief Bit-level I/O streams for arithmetic coding
- * 
- * This module provides bit-level input and output streams for reading and
- * writing bits to/from byte streams. These streams are used by the arithmetic
- * coder to write and read compressed data at the bit level.
- * 
- * Key features:
- * - Bit buffering: Accumulates bits in a buffer before writing bytes
- * - MSB-first ordering: Bits are written and read in MSB-first order to match
- *   arithmetic coding expectations
- * - Automatic flushing: Buffered bits are automatically flushed when needed
+ * @brief Memory-based Bit Stream utilities for WDR compression.
+ * * This file defines the BitOutputStream and BitInputStream classes, which
+ * facilitate writing and reading individual bits to and from underlying 
+ * byte vectors (std::vector<uint8_t>).
+ * * Key Features:
+ * - Zero-Copy Architecture: operates on references to existing vectors.
+ * - MSB First: Bits are packed from Most Significant Bit to Least Significant Bit.
+ * - Exceptions: Throws std::runtime_error on buffer underflows/overflows.
  */
 
-#include <iostream>
+#include <vector>
 #include <cstdint>
+#include <stdexcept>
 
 /**
- * @brief Bit-level output stream for writing bits to a file
- * 
- * This class wraps an std::ostream to provide bit-level writing capabilities.
- * Bits are accumulated in an internal buffer and written as bytes when the
- * buffer is full or when flush() is called.
- * 
- * Bits are written in MSB-first order to match the arithmetic coder's
- * expectations. The buffer automatically flushes when it contains 8 bits,
- * or when flush() is explicitly called.
- * 
- * @note The destructor automatically flushes remaining bits, ensuring no
- *       data is lost.
+ * @brief Writes bits to a dynamically growing memory buffer.
+ * * The BitOutputStream allows writing single bits or multi-bit integers
+ * into a std::vector<uint8_t>. It handles the buffering of partial bytes
+ * internally.
  */
 class BitOutputStream {
 public:
     /**
-     * Constructor.
-     * 
-     * @param stream Output stream to write bits to
+     * @brief Construct a new Bit Output Stream object.
+     * * @param target_buffer Reference to the output vector. The vector is NOT cleared
+     * on construction; bits are appended to existing content.
+     * The caller retains ownership of this vector.
      */
-    explicit BitOutputStream(std::ostream& stream);
-    
+    explicit BitOutputStream(std::vector<uint8_t>& target_buffer);
+
     /**
-     * Destructor. Automatically flushes remaining bits.
+     * @brief Destroy the Bit Output Stream object.
+     * * Automatically calls flush() to ensure any remaining partial bits
+     * are written to the buffer.
      */
     ~BitOutputStream();
-    
+
     /**
-     * Write a single bit to the stream.
-     * 
-     * @param bit Bit value to write (true = 1, false = 0)
+     * @brief Write a single bit to the stream.
+     * * The bit is added to an internal accumulator. When 8 bits are accumulated,
+     * a byte is pushed to the target vector.
+     * * @param bit The bit to write (true = 1, false = 0).
      */
     void write_bit(bool bit);
-    
+
     /**
-     * Write multiple bits to the stream (MSB first).
-     * 
-     * @param value Value to write
-     * @param num_bits Number of bits to write (1-32)
+     * @brief Write multiple bits of an integer to the stream.
+     * * Bits are written starting from the MSB (Most Significant Bit) down to the LSB.
+     * * @param value The integer value containing the bits to write.
+     * @param num_bits The number of bits to write (1 to 32).
+     * @throw std::invalid_argument If num_bits is not between 1 and 32.
      */
     void write_bits(uint32_t value, int num_bits);
-    
+
     /**
-     * Flush the internal buffer to the stream.
-     * Pads the last byte with zeros if necessary.
+     * @brief Flushes any pending bits to the output vector.
+     * * If there are bits in the temporary buffer that haven't formed a full byte
+     * yet, they are padded with zeros (at the LSB end) and pushed to the vector.
      */
     void flush();
-    
-    // Disable copy and assignment
-    BitOutputStream(const BitOutputStream&) = delete;
-    BitOutputStream& operator=(const BitOutputStream&) = delete;
 
 private:
-    std::ostream& stream_;
-    uint8_t buffer_;
-    int bits_in_buffer_;
+    std::vector<uint8_t>& buffer_; ///< Reference to the user-owned output vector.
+    uint8_t pending_byte_;         ///< Accumulator for bits currently being built.
+    int bits_in_pending_;          ///< Count of bits currently in the accumulator (0-7).
 };
 
 /**
- * @brief Bit-level input stream for reading bits from a file
- * 
- * This class wraps an std::istream to provide bit-level reading capabilities.
- * Bytes are read from the stream and bits are extracted one at a time.
- * 
- * Bits are read in MSB-first order to match the arithmetic coder's
- * expectations. The buffer is automatically refilled when empty.
- * 
- * @note The stream throws std::runtime_error when attempting to read past EOF.
+ * @brief Reads bits from a read-only memory buffer.
+ * * The BitInputStream allows reading single bits or multi-bit integers
+ * from a std::vector<uint8_t>. It is designed to throw exceptions on
+ * underflow to stop the Arithmetic Coder safely.
  */
 class BitInputStream {
 public:
     /**
-     * Constructor.
-     * 
-     * @param stream Input stream to read bits from
+     * @brief Construct a new Bit Input Stream object.
+     * * @param source_buffer Reference to the input vector containing compressed data.
      */
-    explicit BitInputStream(std::istream& stream);
-    
+    explicit BitInputStream(const std::vector<uint8_t>& source_buffer);
+
     /**
-     * Read a single bit from the stream.
-     * 
-     * @return Bit value (true = 1, false = 0)
-     * @throws std::runtime_error if EOF is reached
+     * @brief Read a single bit from the stream.
+     * * @return true if the bit is 1.
+     * @return false if the bit is 0.
+     * @throw std::runtime_error If attempting to read past the end of the buffer.
      */
     bool read_bit();
-    
+
     /**
-     * Read multiple bits from the stream (MSB first).
-     * 
-     * @param num_bits Number of bits to read (1-32)
-     * @return Value read from stream
-     * @throws std::runtime_error if EOF is reached
+     * @brief Read multiple bits to form an integer.
+     * * Bits are read and reconstructed MSB first.
+     * * @param num_bits The number of bits to read (1 to 32).
+     * @return uint32_t The constructed integer value.
+     * @throw std::invalid_argument If num_bits is not between 1 and 32.
      */
     uint32_t read_bits(int num_bits);
-    
+
     /**
-     * Check if end of file has been reached.
-     * 
-     * @return True if EOF, false otherwise
+     * @brief Check if the end of the stream has been reached.
+     * * @return true If no more bytes are available in the buffer.
+     * @return false If there is still data to read.
      */
     bool eof() const;
-    
-    // Disable copy and assignment
-    BitInputStream(const BitInputStream&) = delete;
-    BitInputStream& operator=(const BitInputStream&) = delete;
 
 private:
-    std::istream& stream_;
-    uint8_t buffer_;
-    int bits_in_buffer_;
-    bool eof_flag_;
-    
-    /**
-     * Fill the buffer with the next byte from the stream.
-     */
-    void fill_buffer();
+    const std::vector<uint8_t>& buffer_; ///< Reference to the input data.
+    size_t byte_pos_;                    ///< Current index in the byte vector.
+    int bits_consumed_in_byte_;          ///< Current bit index (0-7) within the current byte.
 };
 
 #endif // BIT_STREAM_HPP
-
