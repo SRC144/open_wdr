@@ -1,52 +1,7 @@
 import numpy as np
 import pywt
-import tifffile # Re-add this dependency for reading
-from PIL import Image
-from pathlib import Path
+import math
 from typing import Tuple, Dict, Any, Generator
-
-# Increase PIL limit just in case we fall back to it for a medium-sized image
-Image.MAX_IMAGE_PIXELS = None 
-
-# --- Smart I/O ---
-
-def load_image(filepath: str) -> np.ndarray:
-    """
-    Strict Image Loader.
-    Loads image but enforces Single-Channel (2D) requirement.
-    Raises ValueError if image is Multi-Channel (RGB/3D).
-    """
-    path = Path(filepath)
-    img_array = None
-    
-    # 1. Load Strategy (Memmap or PIL)
-    if path.suffix.lower() in ['.tif', '.tiff', '.btf', '.wdr']:
-        try:
-            img_array = tifffile.memmap(filepath, mode='r')
-        except Exception:
-            pass
-
-    if img_array is None:
-        img = Image.open(filepath)
-        img_array = np.array(img)
-
-    # 2. Strict Validation (Fail Fast)
-    if img_array.ndim != 2:
-        raise ValueError(
-            f"WDR Library Error: Image '{filepath}' is not 2D ({img_array.shape}).\n"
-            "The WDR core strictly requires single-channel input.\n"
-            "Please handle color conversion or channel splitting in your application logic."
-        )
-        
-    return img_array
-
-def save_image(filepath: str, img_array: np.ndarray) -> None:
-    img_array = np.clip(img_array, 0, 255)
-    if img_array.dtype != np.uint8:
-        img_array = img_array.astype(np.uint8)
-    Path(filepath).parent.mkdir(parents=True, exist_ok=True)
-    img = Image.fromarray(img_array)
-    img.save(filepath)
 
 # --- Tiling Logic ---
 
@@ -89,8 +44,7 @@ def yield_tiles(image: np.ndarray, tile_size: int) -> Generator[np.ndarray, None
                 
             yield tile
 
-# --- Shared Logic (Unchanged) ---
-# (scan_for_max_coefficient, do_dwt, etc... keep them exactly as they were)
+# --- Shared Logic ---
 
 def scan_for_max_coefficient(image: np.ndarray, tile_size: int, scales: int, wavelet: str) -> float:
     global_max = 0.0
@@ -102,6 +56,11 @@ def scan_for_max_coefficient(image: np.ndarray, tile_size: int, scales: int, wav
         if local_max > global_max:
             global_max = local_max
     return global_max
+
+def calculate_global_T(max_abs: float) -> float:
+    if max_abs == 0.0: 
+        return 1.0
+    return 2.0 ** math.floor(math.log2(max_abs))
 
 def do_dwt(img_array: np.ndarray, scales: int = 2, wavelet: str = 'bior4.4') -> Tuple:
     if scales <= 0: raise ValueError("scales > 0")

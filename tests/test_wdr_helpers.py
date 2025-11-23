@@ -22,68 +22,7 @@ def odd_image():
     """Returns an image with odd dimensions (non-power-of-2, non-tile-aligned)."""
     return np.random.rand(600, 300) * 255
 
-# --- I/O Tests ---
-
-def test_save_and_load_png(random_image):
-    """Test saving and loading a standard PNG (PIL path)."""
-    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
-        temp_path = f.name
-    
-    try:
-        # Save
-        hlp.save_image(temp_path, random_image)
-        assert os.path.exists(temp_path)
-        
-        # Load
-        loaded = hlp.load_image(temp_path)
-        
-        # Verify
-        assert loaded.shape == random_image.shape
-        # Saved as uint8, so we allow rounding errors up to 1.0
-        assert np.allclose(loaded, np.clip(random_image, 0, 255).astype(np.uint8), atol=1.0)
-    finally:
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
-
-def test_load_tiff_memmap(random_image):
-    """Test loading a TIFF file (Should trigger tifffile.memmap path)."""
-    with tempfile.NamedTemporaryFile(suffix='.tif', delete=False) as f:
-        temp_path = f.name
-        
-    try:
-        # Create a real TIFF file using tifffile directly
-        data = random_image.astype(np.uint8)
-        tifffile.imwrite(temp_path, data)
-        
-        # Test helper load
-        loaded = hlp.load_image(temp_path)
-        
-        # Verify properties
-        assert isinstance(loaded, (np.ndarray, np.memmap))
-        assert loaded.shape == (512, 512)
-        assert np.allclose(loaded, data)
-    finally:
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
-
-def test_load_image_strict_check():
-    """Test that load_image raises ValueError for RGB images."""
-    # Create an RGB image
-    rgb_img = np.random.randint(0, 255, (100, 100, 3), dtype=np.uint8)
-    
-    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
-        temp_path = f.name
-        Image.fromarray(rgb_img).save(temp_path)
-        
-    try:
-        # Should raise ValueError because WDR core requires 2D input
-        with pytest.raises(ValueError, match="WDR Library Error"):
-            hlp.load_image(temp_path)
-    finally:
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
-
-# --- Tiling Tests (New) ---
+# --- Tiling Tests ---
 
 def test_yield_tiles_exact_fit():
     """Test tiling on an image that is a perfect multiple of tile size."""

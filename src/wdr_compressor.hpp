@@ -6,7 +6,14 @@
  * @brief Wavelet Difference Reduction (WDR) compressor implementation (Memory-Based)
  *
  * This implementation is based on the Wavelet Difference Reduction algorithm
- * for embedded image compression. The WDR algorithm combines:
+ * for embedded image compression. 
+ * 
+ * Tian, J., Wells, R.O. (2002). Embedded Image Coding Using Wavelet Difference Reduction.
+ * In: Topiwala, P.N. (eds) Wavelet Image and Video Compression. 
+ * The International Series in Engineering and Computer Science, vol 450. 
+ * Springer, Boston, MA. https://doi.org/10.1007/0-306-47043-8_17
+ * 
+ * The WDR algorithm combines:
  * - Discrete Wavelet Transform (DWT) for spatial-frequency decomposition
  * - Differential coding and binary reduction for efficient index encoding
  * - Ordered bit-plane transmission for progressive compression
@@ -21,8 +28,8 @@
  * - Removes internal file I/O and legacy headers
  * - Accepts Global Threshold (T) for tile consistency
  *
- * @see WDR algorithm paper for the original WDR algorithm
- * @see Witten, Neal, & Cleary (1987) for the arithmetic coding algorithm
+ * @see @cite Tian2002 for the original WDR algorithm
+ * @see @cite Witten1987 for the arithmetic coding algorithm
  */
 
 #include "adaptive_model.hpp"
