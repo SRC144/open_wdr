@@ -67,7 +67,6 @@ set(HEADERS
     src/adaptive_model.hpp
     src/arithmetic_coder.hpp
     src/wdr_compressor.hpp
-    src/wdr_file_format.hpp
 )
 
 # Python module (exposed as wdr.coder)
