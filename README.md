@@ -25,6 +25,8 @@ The library uses a tiled architecture for memory-efficient processing of large a
    pip install --upgrade pip setuptools wheel
    pip install -r requirements.txt
    ```
+   This includes OpenSlide bindings (`openslide-python` + `openslide-bin`) for Whole Slide Image format support (NDPI, SVS, Philips TIFF).
+
 4. **Build + install**
    ```bash
    pip install -e .
@@ -164,33 +166,59 @@ for r in range((height + tile_size - 1) // tile_size):
 Image.fromarray(np.clip(reconstructed, 0, 255).astype(np.uint8)).save("reconstructed.png")
 ```
 
-### Gigapixel TIFF Workflow Example
+### Example Application: Medical Whole Slide Imaging
 
-The `scripts/converters.py` script is a complete, usable example demonstrating a gigapixel TIFF workflow with compression ratio (CR) and PSNR metrics. It uses memory-mapped file access for efficient handling of large images that exceed available RAM. Full implementation details as well as a guide for its usage can be seen in the script source code.
+The `scripts/` directory includes a complete implementation of the Color Wavelet Difference Reduction (CWDR) workflow for medical imaging, as described in Zerva et al. (2023). This example demonstrates how to apply the WDR library to whole slide images (WSI) from pathology scanners, handling RGB-to-YUV colorspace conversion, independent WDR compression per channel (Y, U, V), reconstruction, and quality evaluation. The tools integrate OpenSlide for reading proprietary formats (NDPI, SVS, Philips TIFF).
+
+#### WSI Compression/Extraction Pipeline
+
+`scripts/wdr_wsi_pipeline.py` is the primary tool for compressing and extracting whole slide images. It handles format detection, streaming tile extraction via OpenSlide, automatic YCbCr colorspace conversion, and cleanup of intermediate files.
 
 ```bash
-# Compress with metrics
-python scripts/converters.py compress input.tiff output.wdr \
+# Compress a whole slide image
+python scripts/wdr_wsi_pipeline.py compress CMU-1.svs cmu1 \
   --tile-size 512 \
   --scales 2 \
   --wavelet bior4.4 \
   --passes 16 \
-  --qstep 0  # 0 = lossless
+  --qstep 0
 
-# Extract with PSNR calculation
-python scripts/converters.py extract input.wdr output.tiff \
-  --original-image reference.tiff  # optional: calculate PSNR vs original
+# Extract back to RGB BigTIFF
+python scripts/wdr_wsi_pipeline.py extract results/ cmu1 reconstructed.tiff
 ```
 
-This script serves as a reference implementation showing one way to use the library for gigapixel workflows. You can adapt it for your specific needs or build custom workflows using the core API functions directly.
+The pipeline produces three channel files (`_Y.wdr`, `_U.wdr`, `_V.wdr`) for efficient storage. Use `--keep-temp` to preserve intermediate TIFF files for debugging.
+
+#### Slide Metadata Inspection
+
+`scripts/wsi_info.py` quickly inspects slide metadata without loading the full image. Useful for verifying dimensions and format before processing.
+
+```bash
+python scripts/wsi_info.py CMU-1.svs
+```
+
+#### Quality Metrics Evaluation
+
+`scripts/wsi_metrics.py` calculates PSNR and SSIM between reconstructed and original slides using streaming processing to avoid memory exhaustion on gigapixel images.
+
+```bash
+python scripts/wsi_metrics.py reconstructed.tiff CMU-1.svs --tile-size 2048
+```
+
+These tools serve as reference implementations showing practical WSI workflows. Adapt them for your specific needs or build custom pipelines using the core API directly.
 
 ## Reference
 
 This implementation is based on:
 
+**Wavelet Difference Reduction (WDR) Algorithm:**  
 Tian, J., Wells, R.O. (2002). Embedded Image Coding Using Wavelet Difference Reduction. In: Topiwala, P.N. (eds) Wavelet Image and Video Compression. The International Series in Engineering and Computer Science, vol 450. Springer, Boston, MA. https://doi.org/10.1007/0-306-47043-8_17
 
-The adaptive arithmetic coding stage uses the algorithm from Witten, I.H., Neal, R.M., & Cleary, J.G. (1987). "Arithmetic coding for data compression." Communications of the ACM, 30(6), 520-540.
+**Color WDR (CWDR) for Medical Imaging:**  
+Zerva, M.C.H., Christou, V., Giannakeas, N., Tzallas, A.T., & Kondi, L.P. (2023). "An Improved Medical Image Compression Method Based on Wavelet Difference Reduction." IEEE Access, vol. 11, pp. 18026-18037. https://doi.org/10.1109/ACCESS.2023.3246948
+
+**Adaptive Arithmetic Coding:**  
+Witten, I.H., Neal, R.M., & Cleary, J.G. (1987). "Arithmetic coding for data compression." Communications of the ACM, 30(6), 520-540.
 
 ## Documentation
 

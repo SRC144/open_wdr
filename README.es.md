@@ -25,6 +25,8 @@ La librería utiliza una arquitectura por bloques para procesar de forma eficien
    pip install --upgrade pip setuptools wheel
    pip install -r requirements.txt
    ```
+   Esto incluye las librerias de OpenSlide (`openslide-python` + `openslide-bin`) para soporte de formatos WSI de microscopía (NDPI, SVS, Philips TIFF).
+
 4. **Compilar e instalar el paquete**
    ```bash
    pip install -e .
@@ -163,33 +165,59 @@ for r in range((height + tile_size - 1) // tile_size):
 Image.fromarray(np.clip(reconstructed, 0, 255).astype(np.uint8)).save("reconstructed.png")
 ```
 
-### Flujo para TIFF Gigapixel
+### Aplicación de Ejemplo: Imágenes Médicas de Microscopía
 
-El script `scripts/bigtiff_pipeline.py` es un ejemplo completo y funcional que demuestra un flujo de trabajo para TIFF gigapixel con métricas de razón de compresión (CR) y PSNR. Utiliza acceso a archivos mapeados en memoria para el manejo eficiente de imágenes grandes que exceden la RAM disponible. Los detalles completos de implementación, así como una guía de uso, pueden consultarse en el código fuente del script.
+El directorio `scripts/` incluye una implementación completa del flujo Color Wavelet Difference Reduction (CWDR) para imágenes médicas, según lo descrito en Zerva et al. (2023). Este ejemplo demuestra cómo aplicar la librería WDR a imágenes completas de microscopía (WSI) de escáneres de patología, manejando la conversión del espacio de color RGB a YUV, compresión WDR independiente por canal (Y, U, V), reconstrucción y evaluación de calidad. Las herramientas integran OpenSlide para leer formatos propietarios (NDPI, SVS, Philips TIFF).
+
+#### Pipeline de Compresión/Extracción WSI
+
+`scripts/wdr_wsi_pipeline.py` es la herramienta principal para comprimir y extraer imágenes de microscopía completas. Maneja la detección de formato, extracción de bloques mediante OpenSlide, conversión automática al espacio de color YCbCr y limpieza de archivos intermedios.
 
 ```bash
-# Comprimir con métricas
-python scripts/bigtiff_pipeline.py compress input.tiff output.wdr \
+# Comprimir una imagen de microscopía
+python scripts/wdr_wsi_pipeline.py compress CMU-1.svs cmu1 \
   --tile-size 512 \
   --scales 2 \
   --wavelet bior4.4 \
   --passes 16 \
-  --qstep 0  # 0 = sin pérdidas
+  --qstep 0
 
-# Extraer con cálculo de PSNR
-python scripts/bigtiff_pipeline.py extract input.wdr output.tiff \
-  --original-image reference.tiff  # opcional: calcular PSNR vs original
+# Extraer de vuelta a RGB BigTIFF
+python scripts/wdr_wsi_pipeline.py extract results/ cmu1 reconstructed.tiff
 ```
 
-Este script sirve como implementación de referencia que muestra una forma de usar la librería para flujos de trabajo gigapixel. Puede adaptarlo según sus necesidades específicas o construir flujos personalizados usando las funciones principales de la API directamente.
+El pipeline genera tres archivos de canal (`_Y.wdr`, `_U.wdr`, `_V.wdr`) para almacenamiento eficiente. Use `--keep-temp` para conservar los archivos TIFF intermedios durante depuración.
+
+#### Inspección de Metadatos
+
+`scripts/wsi_info.py` inspecciona rápidamente los metadatos de la lámina sin cargar la imagen completa. Útil para verificar dimensiones y formato antes del procesamiento.
+
+```bash
+python scripts/wsi_info.py CMU-1.svs
+```
+
+#### Evaluación de Métricas de Calidad
+
+`scripts/wsi_metrics.py` calcula PSNR y SSIM entre láminas reconstruidas y originales usando procesamiento por bloques para evitar agotamiento de memoria en imágenes gigapixel.
+
+```bash
+python scripts/wsi_metrics.py reconstructed.tiff CMU-1.svs --tile-size 2048
+```
+
+Estas herramientas sirven como implementaciones de referencia que muestran flujos de trabajo prácticos con WSI. Adáptelas según sus necesidades específicas o construya pipelines personalizados usando la API principal directamente.
 
 ## Referencia
 
 Esta implementación se basa en:
 
+**Algoritmo Wavelet Difference Reduction (WDR):**  
 Tian, J., Wells, R.O. (2002). Embedded Image Coding Using Wavelet Difference Reduction. In: Topiwala, P.N. (eds) Wavelet Image and Video Compression. The International Series in Engineering and Computer Science, vol 450. Springer, Boston, MA. https://doi.org/10.1007/0-306-47043-8_17
 
-La etapa de codificación aritmética adaptativa utiliza el algoritmo de Witten, I.H., Neal, R.M., & Cleary, J.G. (1987). "Arithmetic coding for data compression." Communications of the ACM, 30(6), 520-540.
+**Color WDR (CWDR) para Imágenes Médicas:**  
+Zerva, M.C.H., Christou, V., Giannakeas, N., Tzallas, A.T., & Kondi, L.P. (2023). "An Improved Medical Image Compression Method Based on Wavelet Difference Reduction." IEEE Access, vol. 11, pp. 18026-18037. https://doi.org/10.1109/ACCESS.2023.3246948
+
+**Codificación Aritmética Adaptativa:**  
+Witten, I.H., Neal, R.M., & Cleary, J.G. (1987). "Arithmetic coding for data compression." Communications of the ACM, 30(6), 520-540.
 
 ## Documentación
 

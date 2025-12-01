@@ -27,10 +27,10 @@ def yield_tiles(image: np.ndarray, tile_size: int) -> Generator[np.ndarray, None
             # We convert to float64 immediately to detach from the memmap buffer
             chunk = image[y : min(y + tile_size, h), x : min(x + tile_size, w)]
             
-            # If RGB, convert to grayscale using standard luminosity weights
-            if is_rgb:
-                # Y = 0.299R + 0.587G + 0.114B
-                chunk = np.dot(chunk[...,:3], [0.299, 0.587, 0.114])
+            # # If RGB, convert to grayscale using standard luminosity weights
+            # if is_rgb:
+            #     # Y = 0.299R + 0.587G + 0.114B
+            #     chunk = np.dot(chunk[...,:3], [0.299, 0.587, 0.114])
 
             # Ensure it's float64 for DWT
             tile = np.array(chunk, dtype=np.float64)
