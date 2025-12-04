@@ -357,8 +357,16 @@ def run_compress(args):
             tiff_in = tiff_paths[chan]
             wdr_out = f"{output_base}_{chan.upper()}.wdr"
             
-            # compress_channel now handles the "Compresing..." print and progress
-            stats = compress_channel(tiff_in, wdr_out, args, chan.upper())
+            # Determine passes for this channel
+            if args.half_chroma_passes and chan in ['u', 'v']:
+                original_passes = args.num_passes
+                args.num_passes = max(1, args.num_passes // 2)
+                print(f"    (Using {args.num_passes} passes for chroma channel {chan.upper()})")
+                stats = compress_channel(tiff_in, wdr_out, args, chan.upper())
+                args.num_passes = original_passes  # Restore for next iteration
+            else:
+                stats = compress_channel(tiff_in, wdr_out, args, chan.upper())
+            
             channel_sizes[chan] = stats['compressed_size']
 
         total_comp = sum(channel_sizes.values())
@@ -467,6 +475,8 @@ def main():
     cmd_c.add_argument("--passes", type=int, default=16, dest="num_passes")
     cmd_c.add_argument("--qstep", type=float, default=None, help="Quantization step (0=Lossless)")
     cmd_c.add_argument("--keep-temp", action="store_true", help="Keep intermediate Y/U/V TIFFs")
+    cmd_c.add_argument("--half-chroma-passes", action="store_true",
+                       help="Use half the passes for U/V chroma channels")
 
     # --- Extract ---
     cmd_x = subparsers.add_parser("extract", help="WDR -> RGB BigTIFF")

@@ -76,3 +76,5 @@ context/
 *.ndpi
 *.wdr
 *.egg-info
+
+to_test/
