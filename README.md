@@ -172,7 +172,7 @@ Image.fromarray(np.clip(reconstructed, 0, 255).astype(np.uint8)).save("reconstru
 
 ### Example Application: Medical Whole Slide Imaging
 
-The `scripts/` directory includes a complete implementation of the Color Wavelet Difference Reduction (CWDR) workflow for medical imaging, as described in Zerva et al. (2023). This example demonstrates how to apply the WDR library to whole slide images (WSI) from pathology scanners, handling RGB-to-YUV colorspace conversion, independent WDR compression per channel (Y, U, V), reconstruction, and quality evaluation. The tools integrate OpenSlide for reading proprietary formats (NDPI, SVS, Philips TIFF).
+The `scripts/` directory includes a complete implementation of the Color Wavelet Difference Reduction (CWDR) based workflow for medical imaging, as described in Zerva et al. (2023). This example demonstrates how to apply the WDR library to whole slide images (WSI) from pathology scanners (models supported by openslide !href[https://openslide.org/formats/]), handling RGB-to-YUV colorspace conversion, independent WDR compression per channel (Y, U, V), reconstruction, and quality evaluation. The tools integrate OpenSlide for reading proprietary formats (NDPI, SVS, Philips TIFF).
 
 #### WSI Compression/Extraction Pipeline
 
