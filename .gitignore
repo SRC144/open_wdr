@@ -68,3 +68,13 @@ ENV/
 
 #context files
 context/
+
+#large files
+*.tiff
+*.tif
+*.svs
+*.ndpi
+*.wdr
+*.egg-info
+
+to_test/

@@ -17,8 +17,12 @@ The library uses a tiled architecture for memory-efficient processing of large a
    ```
 2. **(Optional) Create virtual environment**
    ```bash
-   python3 -m venv .venv && source .venv/bin/activate  # Linux/macOS
-   python -m venv .venv && .venv\Scripts\activate      # Windows
+   # Linux/macOS
+   python3 -m venv .venv && source .venv/bin/activate  
+
+   # Windows
+   python -m venv .venv 
+   .venv\Scripts\activate      
    ```
 3. **Install tools**
    ```bash
@@ -176,12 +180,7 @@ The `scripts/` directory includes a complete implementation of the Color Wavelet
 
 ```bash
 # Compress a whole slide image
-python scripts/wdr_wsi_pipeline.py compress CMU-1.svs cmu1 \
-  --tile-size 512 \
-  --scales 2 \
-  --wavelet bior4.4 \
-  --passes 16 \
-  --qstep 0
+python scripts/wdr_wsi_pipeline.py compress CMU-1.svs cmu1 --tile-size 512 --scales 2 --wavelet bior4.4 --passes 16
 
 # Extract back to RGB BigTIFF
 python scripts/wdr_wsi_pipeline.py extract results/ cmu1 reconstructed.tiff

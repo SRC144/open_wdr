@@ -1,6 +1,7 @@
 import os
 import sys
 import subprocess
+import shutil
 from pathlib import Path
 from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext
@@ -38,7 +39,7 @@ class CMakeBuild(build_ext):
         build_args = ["--config", cfg]
 
         cmake_args += ["-DCMAKE_BUILD_TYPE=" + cfg]
-        build_args += ["--", "-j2"]
+        build_args += ["--parallel", "2"]
 
         env = os.environ.copy()
         env["CXXFLAGS"] = '{} -DVERSION_INFO=\\"{}\\"'.format(
@@ -52,24 +53,25 @@ class CMakeBuild(build_ext):
         subprocess.check_call(
             ["cmake", "--build", "."] + build_args, cwd=self.build_temp
         )
+        if os.name == "nt":
+            # The name of the generated file (e.g., coder.cp313-win_amd64.pyd)
+            filename = os.path.basename(self.get_ext_fullpath(ext.name))
+            
+            # The path where MSVC actually put it
+            src_artifact = os.path.join(extdir, cfg, filename)
+            
+            # The path where Python expects it
+            dst_artifact = os.path.join(extdir, filename)
+
+            if os.path.exists(src_artifact):
+                print(f"Windows Fix: Moving {src_artifact} -> {dst_artifact}")
+                shutil.copyfile(src_artifact, dst_artifact)
 
 
 setup(
-    name="wdr-compression-pipeline",
-    version="0.1.0",
-    author="WDR Compression Pipeline",
-    description="Hybrid Python/C++ WDR Image Compression Pipeline",
-    long_description="",
     packages=find_packages(),
     ext_modules=[CMakeExtension("wdr.coder")],
     cmdclass=dict(build_ext=CMakeBuild),
     zip_safe=False,
-    python_requires=">=3.8",
-    install_requires=[
-        "numpy>=1.20.0",
-        "pywavelets>=1.3.0",
-        "Pillow>=8.0.0",
-        "tifffile>=2024.8.30",
-    ],
 )
 
