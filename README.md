@@ -1,4 +1,4 @@
-# Hybrid Python/C++ Wavelet Difference Reduction (WDR) Image Coder
+# Open WDR: A hybrid Python/C++ Wavelet Difference Reduction (WDR) Image Coder
 
 [English](README.md) | [Español](README.es.md)
 
