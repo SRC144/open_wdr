@@ -8,6 +8,8 @@ Wavelet Difference Reduction (WDR) combines discrete wavelet transforms, progres
 
 The library uses a tiled architecture for memory-efficient processing of large and gigapixel images. Images are processed in fixed-size tiles (default 512×512), enabling compression of images larger than available RAM while maintaining consistent quality across tile boundaries through a global threshold mechanism.
 
+Our paper: [OpenWDR paper](https://drive.google.com/file/d/18tRxO1k4r-dBN7Q2yfvBPiJfCN7h7GKN/view?usp=sharing)
+
 ## Install & Build (All Platforms)
 
 1. **Clone**
